@@ -1,3 +1,4 @@
+use zeroclaw::channels::Channel;
 use zeroclaw::channels::line::{LineChannel, QuickReplyItem};
 
 #[test]

@@ -1,5 +1,6 @@
 use super::traits::Channel;
 use async_trait::async_trait;
+use base64::Engine;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
