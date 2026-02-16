@@ -2988,3 +2988,47 @@ mod tests {
         assert_eq!(provider_env_var("some-new-provider"), "API_KEY");
     }
 }
+// ── Lark ──
+if selected_channels.contains(&"Lark") {
+    println!();
+    println!("{}", style("Lark (Feishu) Setup").white().bold());
+    print_bullet("1. Go to https://open.larksuite.com/");
+    print_bullet("2. Create a new app or use existing");
+    print_bullet("3. Enable 'Bot' capability in app settings");
+    print_bullet("4. Copy App ID and App Secret");
+
+    let app_id = Text::new()
+        .with_prompt("  App ID (from Lark Open Platform)")
+        .interact()?;
+
+    let app_secret = Password::new()
+        .with_prompt("  App Secret (from Lark Open Platform)")
+        .interact()?;
+
+    let verify_token = Text::new()
+        .with_prompt("  Verify Token (webhook verification)")
+        .default("lark-webhook-verify".into())
+        .interact()?;
+
+    let encrypt_key_input = Text::new()
+        .with_prompt("  Encrypt Key (optional, press Enter to skip)")
+        .allow_empty(true)
+        .interact()?;
+
+    let encrypt_key = if encrypt_key_input.is_empty() { None } else { Some(encrypt_key_input) };
+
+    let allowed_users = Text::new()
+        .with_prompt("  Allowed User IDs (comma-separated, or * for all)")
+        .default("*".into())
+        .interact()?;
+
+    config.lark = Some(LarkConfig {
+        app_id,
+        app_secret,
+        encrypt_key,
+        verify_token,
+        allowed_users: parse_users(&allowed_users),
+    });
+
+    println!("  {} Lark configured", style("✓").green());
+}
