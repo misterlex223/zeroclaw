@@ -7,7 +7,9 @@
 //! - Request timeouts (30s) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
-use crate::channels::{Channel, WhatsAppChannel};
+use crate::channels::{Channel, LineChannel, WhatsAppChannel};
+use crate::channels::line_webhook::{LineWebhook, WebhookEventType};
+use crate::channels::ChannelMessage;
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, Provider};
@@ -161,6 +163,8 @@ pub struct AppState {
     pub whatsapp: Option<Arc<WhatsAppChannel>>,
     /// `WhatsApp` app secret for webhook signature verification (`X-Hub-Signature-256`)
     pub whatsapp_app_secret: Option<Arc<str>>,
+    /// LINE channel for webhook handling
+    pub line_channel: Option<Arc<LineChannel>>,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -213,6 +217,16 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
                 wa.phone_number_id.clone(),
                 wa.verify_token.clone(),
                 wa.allowed_numbers.clone(),
+            ))
+        });
+
+    // LINE channel (if configured)
+    let line_channel: Option<Arc<LineChannel>> =
+        config.channels_config.line.as_ref().map(|ln| {
+            Arc::new(LineChannel::new(
+                ln.channel_access_token.clone(),
+                ln.channel_secret.clone(),
+                ln.allowed_users.clone(),
             ))
         });
 
@@ -309,6 +323,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         idempotency_store,
         whatsapp: whatsapp_channel,
         whatsapp_app_secret,
+        line_channel: line_channel,
     };
 
     // Build router with middleware
@@ -318,6 +333,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/webhook", post(handle_webhook))
         .route("/whatsapp", get(handle_whatsapp_verify))
         .route("/whatsapp", post(handle_whatsapp_message))
+        .route("/webhook/line", post(handle_line_webhook))
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(TimeoutLayer::with_status_code(
@@ -665,6 +681,102 @@ async fn handle_whatsapp_message(
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
+/// Handle LINE webhook events
+pub async fn handle_line_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let line_channel = state.line_channel.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("LINE channel not configured")
+    }).map_err(|e| {
+        tracing::error!("LINE webhook: {e}");
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "LINE not configured"})))
+    })?;
+
+    let signature = headers
+        .get("x-line-signature")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| anyhow::anyhow!("Missing X-Line-Signature"))
+        .map_err(|e| {
+            tracing::warn!("LINE webhook: {e}");
+            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing signature"})))
+        })?;
+
+    if !line_channel.verify_webhook_signature(&body, signature) {
+        tracing::warn!("LINE webhook: invalid signature");
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid signature"})));
+    }
+
+    let webhook: LineWebhook = serde_json::from_slice(&body)
+        .map_err(|e| {
+            tracing::error!("LINE webhook: invalid JSON: {e}");
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Invalid JSON: {e}")})))
+        })?;
+
+    for event in webhook.events {
+        if event.event_type != WebhookEventType::Message {
+            continue;
+        }
+
+        let Some(msg) = event.message else {
+            continue;
+        };
+
+        let Some(text) = msg.text else {
+            continue;
+        };
+
+        if !line_channel.is_user_allowed(&event.source.user_id) {
+            tracing::warn!("LINE: ignoring message from unauthorized user: {}", event.source.user_id);
+            continue;
+        }
+
+        tracing::info!(
+            "LINE message from {}: {}",
+            event.source.user_id,
+            truncate_with_ellipsis(&text, 50)
+        );
+
+        // Auto-save to memory
+        if state.auto_save {
+            let _ = state
+                .mem
+                .store(
+                    &format!("line_{}", event.source.user_id),
+                    &text,
+                    MemoryCategory::Conversation,
+                )
+                .await;
+        }
+
+        // Call the LLM
+        match state
+            .provider
+            .chat(&text, &state.model, state.temperature)
+            .await
+        {
+            Ok(response) => {
+                // Send reply via LINE
+                if let Err(e) = line_channel.send(&response, &event.source.user_id).await {
+                    tracing::error!("Failed to send LINE reply: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::error!("LLM error for LINE message: {e:#}");
+                let _ = line_channel
+                    .send(
+                        "Sorry, I couldn't process your message right now.",
+                        &event.source.user_id,
+                    )
+                    .await;
+            }
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,6 +925,7 @@ mod tests {
             idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300))),
             whatsapp: None,
             whatsapp_app_secret: None,
+            line_channel: None,
         };
 
         let mut headers = HeaderMap::new();
