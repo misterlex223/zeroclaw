@@ -1,4 +1,4 @@
-use crate::config::schema::{IrcConfig, WhatsAppConfig};
+use crate::config::schema::{IrcConfig, LarkConfig, WhatsAppConfig};
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
     HeartbeatConfig, IMessageConfig, MatrixConfig, MemoryConfig, ObservabilityConfig,

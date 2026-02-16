@@ -683,6 +683,7 @@ pub struct ChannelsConfig {
     pub matrix: Option<MatrixConfig>,
     pub whatsapp: Option<WhatsAppConfig>,
     pub email: Option<crate::channels::email_channel::EmailConfig>,
+    pub lark: Option<LarkConfig>,
     pub irc: Option<IrcConfig>,
 }
 
@@ -698,6 +699,7 @@ impl Default for ChannelsConfig {
             matrix: None,
             whatsapp: None,
             email: None,
+            lark: None,
             irc: None,
         }
     }
@@ -759,6 +761,22 @@ pub struct WhatsAppConfig {
     /// Allowed phone numbers (E.164 format: +1234567890) or "*" for all
     #[serde(default)]
     pub allowed_numbers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LarkConfig {
+    /// App ID from Lark Open Platform
+    pub app_id: String,
+    /// App Secret from Lark Open Platform
+    pub app_secret: String,
+    /// Encryption key for encrypted events (optional)
+    #[serde(default)]
+    pub encrypt_key: Option<String>,
+    /// Verify token for webhook URL verification (you define this)
+    pub verify_token: String,
+    /// Allowed Lark User IDs or Open IDs (use "*" for all users)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1368,6 +1386,7 @@ default_temperature = 0.7
             }),
             whatsapp: None,
             email: None,
+            lark: None,
             irc: None,
         };
         let toml_str = toml::to_string_pretty(&c).unwrap();
@@ -1526,6 +1545,7 @@ channel_id = "C123"
                 allowed_numbers: vec!["+1".into()],
             }),
             email: None,
+            lark: None,
             irc: None,
         };
         let toml_str = toml::to_string_pretty(&c).unwrap();
