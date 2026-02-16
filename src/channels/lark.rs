@@ -1,6 +1,8 @@
 //! Lark (Feishu) channel implementation
 
 use super::lark_types::*;
+use super::traits::{Channel, ChannelMessage};
+use async_trait::async_trait;
 
 /// Lark channel — receives messages via webhook/event, sends via Messaging API
 pub struct LarkChannel {
@@ -129,5 +131,85 @@ impl LarkChannel {
         }
 
         Ok(())
+    }
+
+    /// Get or fetch token without mutating self (for Channel trait)
+    async fn get_or_fetch_token(&self, client: &mut reqwest::Client) -> anyhow::Result<String> {
+        if let Some(token) = &self.access_token {
+            return Ok(token.clone());
+        }
+
+        let body = serde_json::json!({
+            "app_id": self.app_id,
+            "app_secret": self.app_secret
+        });
+
+        let resp: LarkTokenResponse = client
+            .post("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal")
+            .json(&body)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if resp.code != 0 {
+            anyhow::bail!("Failed to get access token: {}", resp.msg);
+        }
+
+        Ok(resp.tenant_access_token.unwrap_or_default())
+    }
+}
+
+#[async_trait]
+impl Channel for LarkChannel {
+    fn name(&self) -> &str {
+        "lark"
+    }
+
+    async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()> {
+        let mut client = reqwest::Client::new();
+        let token = self.get_or_fetch_token(&mut client).await?;
+
+        let content = serde_json::json!({
+            "text": message
+        });
+
+        let body = LarkSendMessageRequest {
+            receive_id_type: "open_id".into(),
+            msg_type: "text".into(),
+            receive_id: recipient.into(),
+            content,
+        };
+
+        let resp: LarkSendMessageResponse = client
+            .post("https://open.larksuite.com/open-apis/message/v4/send")
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if resp.code != 0 {
+            anyhow::bail!("Lark send failed: {}", resp.msg);
+        }
+
+        Ok(())
+    }
+
+    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        // Webhook-based: Gateway handles incoming messages
+        // This waits indefinitely since we don't poll
+        std::future::pending().await
+    }
+
+    async fn health_check(&self) -> bool {
+        self.client
+            .get("https://open.larksuite.com/open-apis/bot/v3/info")
+            .header("Authorization", format!("Bearer {}", self.access_token.as_ref().unwrap_or(&String::new())))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
     }
 }
