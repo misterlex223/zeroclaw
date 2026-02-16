@@ -283,3 +283,29 @@ mod tests {
         assert!(!ch.is_user_allowed("ou_12"));
     }
 }
+    /// Send rich text (post) message to Lark
+    pub async fn send_post(&mut self, user_id: &str, content: Vec<Vec<LarkTextElement>>) -> anyhow::Result<()> {
+        let token = self.get_access_token().await?;
+        let post_content = LarkPostContent {
+            post: LarkPost {
+                zh_cn: LarkPostContentZhCn {
+                    title: None,
+                    content,
+                },
+            },
+        };
+        let body = LarkSendMessageRequest {
+            receive_id_type: "open_id".into(),
+            msg_type: "post".into(),
+            receive_id: user_id.into(),
+            content: serde_json::to_value(post_content)?,
+        };
+        let resp: LarkSendMessageResponse = self.client
+            .post("https://open.larksuite.com/open-apis/message/v4/send")
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .send().await?
+            .json().await?;
+        if resp.code != 0 { anyhow::bail!("Lark send failed: {}", resp.msg); }
+        Ok(())
+    }
