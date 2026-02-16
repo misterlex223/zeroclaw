@@ -1046,3 +1046,53 @@ mod tests {
         ));
     }
 }
+
+/// GET /lark — Lark webhook URL verification
+async fn handle_lark_verify(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if state.lark.is_none() {
+        return (StatusCode::NOT_FOUND, "Lark channel not configured").into_response();
+    }
+    let challenge = params.get("challenge");
+    if let Some(challenge) = challenge {
+        (StatusCode::OK, challenge.clone()).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, "Missing challenge").into_response()
+    }
+}
+
+/// POST /lark — Lark webhook/event receiving endpoint  
+async fn handle_lark_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let client_key = client_key_from_headers(&headers);
+    if !state.rate_limiter.allow_webhook(&client_key) {
+        return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
+    }
+    let lark_channel = match &state.lark {
+        Some(ch) => ch,
+        None => return (StatusCode::NOT_FOUND, "Lark channel not configured").into_response(),
+    };
+    let event: LarkEvent = match serde_json::from_slice(&body) {
+        Ok(e) => e,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response(),
+    };
+    match event.event {
+        LarkEventDetail::Message(msg) => {
+            let sender_id = &msg.sender.sender_id.open_id;
+            let channel = lark_channel.lock().await;
+            if !channel.is_user_allowed(sender_id) {
+                return (StatusCode::OK, ()).into_response();
+            }
+            drop(channel);
+            let content = msg.message.content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let _ = state.mem.add(&content, MemoryCategory::Prompt).await;
+            (StatusCode::OK, ()).into_response()
+        }
+        LarkEventDetail::Unknown(_) => (StatusCode::OK, ()).into_response(),
+    }
+}
