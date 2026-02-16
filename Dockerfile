@@ -1,7 +1,21 @@
 # syntax=docker/dockerfile:1
 
 # ── Stage 1: Build ────────────────────────────────────────────
-FROM rust:1.93-slim AS builder
+# Use Debian 12 (bookworm) to match runtime GLIBC version (2.37)
+# rust:1.93-slim uses Debian Trixie (GLIBC 2.41) which is incompatible
+FROM debian:bookworm-slim AS builder
+
+# Install Rust toolchain
+ENV RUST_VERSION=1.93
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 

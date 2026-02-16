@@ -687,6 +687,17 @@ pub async fn handle_line_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // Rate limiting check
+    let client_key = client_key_from_headers(&headers);
+    if !state.rate_limiter.allow_webhook(&client_key) {
+        tracing::warn!("/webhook/line rate limit exceeded for key: {client_key}");
+        let err = serde_json::json!({
+            "error": "Too many webhook requests. Please retry later.",
+            "retry_after": RATE_LIMIT_WINDOW_SECS,
+        });
+        return (StatusCode::TOO_MANY_REQUESTS, Json(err));
+    }
+
     let line_channel = match state.line_channel.as_ref() {
         Some(ch) => ch,
         None => {

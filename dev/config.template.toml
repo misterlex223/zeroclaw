@@ -3,10 +3,25 @@ config_path = "/zeroclaw-data/.zeroclaw/config.toml"
 # This is the Ollama Base URL, not a secret key
 api_key = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "llama3.2"
+default_model = "glm-4.5-air"
 default_temperature = 0.7
 
 [gateway]
 port = 3000
-host = "[::]"
+host = "localhost"
 allow_public_bind = true
+
+[[model_routes]]
+hint = "fast"
+provider = "anthropic-custom:https://api.z.ai/api/anthropic"
+model = "GLM-4.5-Air"
+
+[[model_routes]]
+hint = "normal"
+provider = "anthropic-custom:https://api.z.ai/api/anthropic"
+model = "GLM-4.6"
+
+[[model_routes]]
+hint = "serious"
+provider = "anthropic-custom:https://api.z.ai/api/anthropic"
+model = "GLM-4.7"

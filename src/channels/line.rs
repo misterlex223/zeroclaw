@@ -2,6 +2,7 @@ use super::traits::Channel;
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -25,7 +26,7 @@ impl LineChannel {
         }
     }
 
-    /// Verify LINE webhook signature
+    /// Verify LINE webhook signature using constant-time comparison
     pub fn verify_webhook_signature(&self, body: &[u8], signature: &str) -> bool {
         // Decode signature from base64
         let decoded_sig = match base64_decode(signature) {
@@ -38,9 +39,9 @@ impl LineChannel {
         mac.update(body);
         let expected = mac.finalize().into_bytes();
 
-        // Constant-time comparison
+        // Constant-time comparison to prevent timing attacks
         decoded_sig.len() == expected.len()
-            && decoded_sig.iter().zip(expected.iter()).all(|(a, b)| a == b)
+            && decoded_sig.ct_eq(&expected).into()
     }
 
     /// Check if a LINE user ID is in the allowlist
