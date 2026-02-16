@@ -679,6 +679,7 @@ pub struct ChannelsConfig {
     pub discord: Option<DiscordConfig>,
     pub slack: Option<SlackConfig>,
     pub webhook: Option<WebhookConfig>,
+    pub line: Option<LineConfig>,
     pub imessage: Option<IMessageConfig>,
     pub matrix: Option<MatrixConfig>,
     pub whatsapp: Option<WhatsAppConfig>,
@@ -694,6 +695,7 @@ impl Default for ChannelsConfig {
             discord: None,
             slack: None,
             webhook: None,
+            line: None,
             imessage: None,
             matrix: None,
             whatsapp: None,
@@ -759,6 +761,17 @@ pub struct WhatsAppConfig {
     /// Allowed phone numbers (E.164 format: +1234567890) or "*" for all
     #[serde(default)]
     pub allowed_numbers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineConfig {
+    /// Channel Access Token from LINE Developers Console
+    pub channel_access_token: String,
+    /// Channel Secret for webhook signature verification
+    pub channel_secret: String,
+    /// Allowed LINE User IDs (use "*" for all users)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1117,6 +1130,7 @@ mod tests {
                 discord: None,
                 slack: None,
                 webhook: None,
+                line: None,
                 imessage: None,
                 matrix: None,
                 whatsapp: None,
@@ -1357,6 +1371,7 @@ default_temperature = 0.7
             discord: None,
             slack: None,
             webhook: None,
+            line: None,
             imessage: Some(IMessageConfig {
                 allowed_contacts: vec!["+1".into()],
             }),
@@ -1516,6 +1531,7 @@ channel_id = "C123"
             discord: None,
             slack: None,
             webhook: None,
+            line: None,
             imessage: None,
             matrix: None,
             whatsapp: Some(WhatsAppConfig {
@@ -1540,6 +1556,87 @@ channel_id = "C123"
     fn channels_config_default_has_no_whatsapp() {
         let c = ChannelsConfig::default();
         assert!(c.whatsapp.is_none());
+    }
+
+    // ── LINE config ───────────────────────────────────────
+
+    #[test]
+    fn line_config_serde() {
+        let lc = LineConfig {
+            channel_access_token: "test_token".into(),
+            channel_secret: "test_secret".into(),
+            allowed_users: vec!["U123".into(), "U456".into()],
+        };
+        let json = serde_json::to_string(&lc).unwrap();
+        let parsed: LineConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.channel_access_token, "test_token");
+        assert_eq!(parsed.channel_secret, "test_secret");
+        assert_eq!(parsed.allowed_users.len(), 2);
+    }
+
+    #[test]
+    fn line_config_toml_roundtrip() {
+        let lc = LineConfig {
+            channel_access_token: "tok".into(),
+            channel_secret: "sec".into(),
+            allowed_users: vec!["U111".into()],
+        };
+        let toml_str = toml::to_string(&lc).unwrap();
+        let parsed: LineConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.channel_access_token, "tok");
+        assert_eq!(parsed.allowed_users, vec!["U111"]);
+    }
+
+    #[test]
+    fn line_config_deserializes_without_allowed_users() {
+        let json = r#"{"channel_access_token":"tok","channel_secret":"sec"}"#;
+        let parsed: LineConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.allowed_users.is_empty());
+    }
+
+    #[test]
+    fn line_config_wildcard_allowed() {
+        let lc = LineConfig {
+            channel_access_token: "tok".into(),
+            channel_secret: "sec".into(),
+            allowed_users: vec!["*".into()],
+        };
+        let toml_str = toml::to_string(&lc).unwrap();
+        let parsed: LineConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.allowed_users, vec!["*"]);
+    }
+
+    #[test]
+    fn channels_config_with_line() {
+        let c = ChannelsConfig {
+            cli: true,
+            telegram: None,
+            discord: None,
+            slack: None,
+            webhook: None,
+            line: Some(LineConfig {
+                channel_access_token: "tok".into(),
+                channel_secret: "sec".into(),
+                allowed_users: vec!["U111".into()],
+            }),
+            imessage: None,
+            matrix: None,
+            whatsapp: None,
+            email: None,
+            irc: None,
+        };
+        let toml_str = toml::to_string_pretty(&c).unwrap();
+        let parsed: ChannelsConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.line.is_some());
+        let line = parsed.line.unwrap();
+        assert_eq!(line.channel_access_token, "tok");
+        assert_eq!(line.allowed_users, vec!["U111"]);
+    }
+
+    #[test]
+    fn channels_config_default_has_no_line() {
+        let c = ChannelsConfig::default();
+        assert!(c.line.is_none());
     }
 
     // ══════════════════════════════════════════════════════════

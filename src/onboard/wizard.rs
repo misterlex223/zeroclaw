@@ -1115,6 +1115,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
         discord: None,
         slack: None,
         webhook: None,
+        line: None,
         imessage: None,
         matrix: None,
         whatsapp: None,
