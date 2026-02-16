@@ -21,7 +21,7 @@ pub use line_webhook::{LineMessage, LineWebhook, WebhookEvent, WebhookEventType}
 pub use matrix::MatrixChannel;
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
-pub use traits::Channel;
+pub use traits::{Channel, ChannelMessage};
 pub use whatsapp::WhatsAppChannel;
 
 use crate::config::Config;
@@ -82,7 +82,6 @@ fn spawn_supervised_listener(
 
 /// Load OpenClaw format bootstrap files into the prompt.
 fn load_openclaw_bootstrap_files(prompt: &mut String, workspace_dir: &std::path::Path) {
-    use std::fmt::Write;
     prompt.push_str("The following workspace files define your identity, behavior, and context.\n\n");
 
     let bootstrap_files = [

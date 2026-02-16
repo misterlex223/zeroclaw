@@ -1,8 +1,7 @@
-use super::traits::{Channel, ChannelMessage};
+use super::traits::Channel;
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -166,7 +165,7 @@ impl Channel for LineChannel {
         self.send_push(recipient, messages).await
     }
 
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<super::traits::ChannelMessage>) -> anyhow::Result<()> {
         // Webhook-based: Gateway handles incoming messages
         // This waits indefinitely since we don't poll
         std::future::pending().await

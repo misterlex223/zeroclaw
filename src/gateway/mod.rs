@@ -687,32 +687,34 @@ pub async fn handle_line_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let line_channel = state.line_channel.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("LINE channel not configured")
-    }).map_err(|e| {
-        tracing::error!("LINE webhook: {e}");
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "LINE not configured"})))
-    })?;
+    let line_channel = match state.line_channel.as_ref() {
+        Some(ch) => ch,
+        None => {
+            tracing::error!("LINE webhook: channel not configured");
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "LINE not configured"})));
+        }
+    };
 
-    let signature = headers
-        .get("x-line-signature")
-        .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| anyhow::anyhow!("Missing X-Line-Signature"))
-        .map_err(|e| {
-            tracing::warn!("LINE webhook: {e}");
-            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing signature"})))
-        })?;
+    let signature = match headers.get("x-line-signature").and_then(|h| h.to_str().ok()) {
+        Some(sig) => sig,
+        None => {
+            tracing::warn!("LINE webhook: missing signature");
+            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Missing signature"})));
+        }
+    };
 
     if !line_channel.verify_webhook_signature(&body, signature) {
         tracing::warn!("LINE webhook: invalid signature");
         return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Invalid signature"})));
     }
 
-    let webhook: LineWebhook = serde_json::from_slice(&body)
-        .map_err(|e| {
+    let webhook: LineWebhook = match serde_json::from_slice(&body) {
+        Ok(w) => w,
+        Err(e) => {
             tracing::error!("LINE webhook: invalid JSON: {e}");
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Invalid JSON: {e}")})))
-        })?;
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Invalid JSON: {e}")})));
+        }
+    };
 
     for event in webhook.events {
         if event.event_type != WebhookEventType::Message {
