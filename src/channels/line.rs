@@ -96,6 +96,53 @@ impl LineChannel {
     }
 }
 
+/// Quick reply item for LINE messages
+pub struct QuickReplyItem {
+    pub label: String,
+    pub text: String,
+}
+
+impl LineChannel {
+    /// Send a flex message
+    pub async fn send_flex(&self,
+                           to: &str,
+                           alt_text: &str,
+                           contents: &serde_json::Value) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "flex",
+            "altText": alt_text,
+            "contents": contents
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send message with quick reply buttons
+    pub async fn send_with_quick_reply(&self,
+                                       to: &str,
+                                       text: &str,
+                                       items: Vec<QuickReplyItem>) -> anyhow::Result<()> {
+        let quick_reply_items: Vec<serde_json::Value> = items.into_iter()
+            .map(|item| serde_json::json!({
+                "type": "action",
+                "action": {
+                    "type": "message",
+                    "label": item.label,
+                    "text": item.text
+                }
+            }))
+            .collect();
+
+        let messages = serde_json::json!([{
+            "type": "text",
+            "text": text,
+            "quickReply": {
+                "items": quick_reply_items
+            }
+        }]);
+        self.send_push(to, messages).await
+    }
+}
+
 /// Helper to decode base64 URL-safe (no padding)
 fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
     use base64::{Engine as _, engine::general_purpose};
@@ -208,5 +255,15 @@ mod tests {
         assert!(ch.is_user_allowed("U123"));
         assert!(!ch.is_user_allowed("U1234"));
         assert!(!ch.is_user_allowed("U12"));
+    }
+
+    #[test]
+    fn line_quick_reply_item_creation() {
+        let item = QuickReplyItem {
+            label: "Yes".to_string(),
+            text: "yes".to_string(),
+        };
+        assert_eq!(item.label, "Yes");
+        assert_eq!(item.text, "yes");
     }
 }
