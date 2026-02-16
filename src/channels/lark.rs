@@ -309,3 +309,31 @@ mod tests {
         if resp.code != 0 { anyhow::bail!("Lark send failed: {}", resp.msg); }
         Ok(())
     }
+    /// Send card message to Lark
+    pub async fn send_card(&mut self, user_id: &str, title: &str, elements: Vec<serde_json::Value>) -> anyhow::Result<()> {
+        let token = self.get_access_token().await?;
+        let card = LarkCardContent {
+            msg_type: "interactive".into(),
+            card: LarkCard {
+                header: Some(LarkCardHeader {
+                    title: LarkCardTitle { content: title.into(), tag: "plain_text".into() },
+                    template: None,
+                }),
+                elements,
+            },
+        };
+        let body = LarkSendMessageRequest {
+            receive_id_type: "open_id".into(),
+            msg_type: "interactive".into(),
+            receive_id: user_id.into(),
+            content: serde_json::to_value(card)?,
+        };
+        let resp: LarkSendMessageResponse = self.client
+            .post("https://open.larksuite.com/open-apis/message/v4/send")
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .send().await?
+            .json().await?;
+        if resp.code != 0 { anyhow::bail!("Lark send failed: {}", resp.msg); }
+        Ok(())
+    }
