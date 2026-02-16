@@ -213,3 +213,73 @@ impl Channel for LarkChannel {
             .unwrap_or(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lark_channel_name() {
+        let ch = LarkChannel::new(
+            "app_id".into(),
+            "app_secret".into(),
+            None,
+            "verify_token".into(),
+            vec![],
+        );
+        assert_eq!(ch.name(), "lark");
+    }
+
+    #[test]
+    fn lark_user_allowed_wildcard() {
+        let ch = LarkChannel::new(
+            "app_id".into(),
+            "app_secret".into(),
+            None,
+            "verify_token".into(),
+            vec!["*".into()],
+        );
+        assert!(ch.is_user_allowed("ou_123"));
+        assert!(ch.is_user_allowed("any_user"));
+    }
+
+    #[test]
+    fn lark_user_allowed_specific() {
+        let ch = LarkChannel::new(
+            "app_id".into(),
+            "app_secret".into(),
+            None,
+            "verify_token".into(),
+            vec!["ou_111".into(), "ou_222".into()],
+        );
+        assert!(ch.is_user_allowed("ou_111"));
+        assert!(ch.is_user_allowed("ou_222"));
+        assert!(!ch.is_user_allowed("ou_333"));
+    }
+
+    #[test]
+    fn lark_user_denied_empty() {
+        let ch = LarkChannel::new(
+            "app_id".into(),
+            "app_secret".into(),
+            None,
+            "verify_token".into(),
+            vec![],
+        );
+        assert!(!ch.is_user_allowed("ou_123"));
+    }
+
+    #[test]
+    fn lark_user_exact_match() {
+        let ch = LarkChannel::new(
+            "app_id".into(),
+            "app_secret".into(),
+            None,
+            "verify_token".into(),
+            vec!["ou_123".into()],
+        );
+        assert!(ch.is_user_allowed("ou_123"));
+        assert!(!ch.is_user_allowed("ou_1234"));
+        assert!(!ch.is_user_allowed("ou_12"));
+    }
+}
