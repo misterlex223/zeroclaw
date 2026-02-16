@@ -3,6 +3,7 @@ pub mod discord;
 pub mod email_channel;
 pub mod imessage;
 pub mod irc;
+pub mod line;
 pub mod matrix;
 pub mod slack;
 pub mod telegram;
@@ -14,6 +15,7 @@ pub use discord::DiscordChannel;
 pub use email_channel::EmailChannel;
 pub use imessage::IMessageChannel;
 pub use irc::IrcChannel;
+pub use line::LineChannel;
 pub use matrix::MatrixChannel;
 pub use slack::SlackChannel;
 pub use telegram::TelegramChannel;
@@ -295,6 +297,7 @@ pub fn handle_command(command: crate::ChannelCommands, config: &Config) -> Resul
                 ("Telegram", config.channels_config.telegram.is_some()),
                 ("Discord", config.channels_config.discord.is_some()),
                 ("Slack", config.channels_config.slack.is_some()),
+                ("LINE", config.channels_config.line.is_some()),
                 ("Webhook", config.channels_config.webhook.is_some()),
                 ("iMessage", config.channels_config.imessage.is_some()),
                 ("Matrix", config.channels_config.matrix.is_some()),
@@ -372,6 +375,17 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
                 sl.bot_token.clone(),
                 sl.channel_id.clone(),
                 sl.allowed_users.clone(),
+            )),
+        ));
+    }
+
+    if let Some(ref ln) = config.channels_config.line {
+        channels.push((
+            "LINE",
+            Arc::new(LineChannel::new(
+                ln.channel_access_token.clone(),
+                ln.channel_secret.clone(),
+                ln.allowed_users.clone(),
             )),
         ));
     }
@@ -571,6 +585,14 @@ pub async fn start_channels(config: Config) -> Result<()> {
             sl.bot_token.clone(),
             sl.channel_id.clone(),
             sl.allowed_users.clone(),
+        )));
+    }
+
+    if let Some(ref ln) = config.channels_config.line {
+        channels.push(Arc::new(LineChannel::new(
+            ln.channel_access_token.clone(),
+            ln.channel_secret.clone(),
+            ln.allowed_users.clone(),
         )));
     }
 
