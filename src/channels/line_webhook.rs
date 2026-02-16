@@ -41,9 +41,12 @@ pub enum WebhookEventType {
 pub struct WebhookSource {
     #[serde(rename = "type")]
     pub source_type: String,
+    #[serde(rename = "userId")]
     pub user_id: String,
+    #[serde(rename = "groupId")]
     #[serde(default)]
     pub group_id: Option<String>,
+    #[serde(rename = "roomId")]
     #[serde(default)]
     pub room_id: Option<String>,
 }

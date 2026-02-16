@@ -288,10 +288,15 @@ mod tests {
     #[test]
     fn auth_source_reports_correctly() {
         let provider = GeminiProvider::new(Some("explicit-key"));
-        // With explicit key, should report "config" (unless CLI credentials exist)
+        // With explicit key, should report based on env vars and CLI credentials
         let source = provider.auth_source();
-        // Should be either "config" or "Gemini CLI OAuth" if CLI is configured
-        assert!(source == "config" || source == "Gemini CLI OAuth");
+        // Possible values: "config", "Gemini CLI OAuth", "GEMINI_API_KEY env var", "GOOGLE_API_KEY env var"
+        match source {
+            "config" | "Gemini CLI OAuth" | "GEMINI_API_KEY env var" | "GOOGLE_API_KEY env var" => {
+                // All valid authentication sources
+            }
+            other => panic!("Unexpected auth source: {}", other),
+        }
     }
 
     #[test]
