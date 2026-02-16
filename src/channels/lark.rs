@@ -1,12 +1,6 @@
 //! Lark (Feishu) channel implementation
 
 use super::lark_types::*;
-use super::traits::{Channel, ChannelMessage};
-use async_trait::async_trait;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// Lark channel — receives messages via webhook/event, sends via Messaging API
 pub struct LarkChannel {
