@@ -1,4 +1,4 @@
-use crate::config::schema::{IrcConfig, WhatsAppConfig};
+use crate::config::schema::{IrcConfig, LineConfig, WhatsAppConfig};
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
     HeartbeatConfig, IMessageConfig, MatrixConfig, MemoryConfig, ObservabilityConfig,
@@ -1174,6 +1174,14 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 }
             ),
             format!(
+                "LINE       {}",
+                if config.line.is_some() {
+                    "✅ connected"
+                } else {
+                    "— Messaging API"
+                }
+            ),
+            format!(
                 "IRC        {}",
                 if config.irc.is_some() {
                     "✅ configured"
@@ -1702,6 +1710,59 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 });
             }
             6 => {
+                // ── LINE ──
+                println!();
+                println!(
+                    "  {} {}",
+                    style("LINE Setup").white().bold(),
+                    style("— Messaging API").dim()
+                );
+                print_bullet("1. Go to developers.line.biz and create a provider");
+                print_bullet("2. Create a Messaging API channel");
+                print_bullet("3. Get your Channel Access Token and Channel Secret");
+                print_bullet("4. Configure webhook URL to: https://your-domain/webhook/line");
+                println!();
+
+                let channel_access_token: String = Input::new()
+                    .with_prompt("  Channel Access Token (from LINE Developers)")
+                    .interact_text()?;
+
+                if channel_access_token.trim().is_empty() {
+                    println!("  {} Skipped", style("→").dim());
+                    continue;
+                }
+
+                let channel_secret: String = Input::new()
+                    .with_prompt("  Channel Secret (from LINE Developers)")
+                    .interact_text()?;
+
+                if channel_secret.trim().is_empty() {
+                    println!("  {} Skipped — channel secret required", style("→").dim());
+                    continue;
+                }
+
+                let users_str: String = Input::new()
+                    .with_prompt("  Allowed LINE user IDs (comma-separated, or * for all)")
+                    .default("*".into())
+                    .interact_text()?;
+
+                let allowed_users = if users_str.trim() == "*" {
+                    vec!["*".into()]
+                } else {
+                    users_str.split(',').map(|s| s.trim().to_string()).collect()
+                };
+
+                config.line = Some(LineConfig {
+                    channel_access_token: channel_access_token.trim().to_string(),
+                    channel_secret: channel_secret.trim().to_string(),
+                    allowed_users,
+                });
+                println!(
+                    "  {} LINE configured",
+                    style("✅").green().bold()
+                );
+            }
+            7 => {
                 // ── IRC ──
                 println!();
                 println!(
@@ -1839,7 +1900,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     verify_tls: Some(verify_tls),
                 });
             }
-            7 => {
+            8 => {
                 // ── Webhook ──
                 println!();
                 println!(
@@ -1896,6 +1957,9 @@ fn setup_channels() -> Result<ChannelsConfig> {
     }
     if config.whatsapp.is_some() {
         active.push("WhatsApp");
+    }
+    if config.line.is_some() {
+        active.push("LINE");
     }
     if config.email.is_some() {
         active.push("Email");
