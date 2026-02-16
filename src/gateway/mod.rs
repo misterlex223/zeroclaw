@@ -7,7 +7,7 @@
 //! - Request timeouts (30s) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
-use crate::channels::{Channel, WhatsAppChannel};
+use crate::channels::{Channel, WhatsAppChannel, LarkChannel};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, Provider};
@@ -161,6 +161,7 @@ pub struct AppState {
     pub whatsapp: Option<Arc<WhatsAppChannel>>,
     /// `WhatsApp` app secret for webhook signature verification (`X-Hub-Signature-256`)
     pub whatsapp_app_secret: Option<Arc<str>>,
+    pub lark: Option<Arc<tokio::sync::Mutex<LarkChannel>>,
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -214,6 +215,18 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
                 wa.verify_token.clone(),
                 wa.allowed_numbers.clone(),
             ))
+
+// Lark channel (if configured)
+let lark_channel: Option<Arc<tokio::sync::Mutex<LarkChannel>>> =
+    config.channels_config.lark.as_ref().map(|l| {
+        Arc::new(tokio::sync::Mutex::new(LarkChannel::new(
+            l.app_id.clone(),
+            l.app_secret.clone(),
+            l.encrypt_key.clone(),
+            l.verify_token.clone(),
+            l.allowed_users.clone(),
+        )))
+    });
         });
 
     // WhatsApp app secret for webhook signature verification
@@ -308,6 +321,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         rate_limiter,
         idempotency_store,
         whatsapp: whatsapp_channel,
+        lark: lark_channel,
         whatsapp_app_secret,
     };
 
