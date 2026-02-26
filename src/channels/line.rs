@@ -606,6 +606,35 @@ impl LineChannel {
         self.send_push(to, messages).await
     }
 
+    /// Send flex bubble message using the flex builder types
+    pub async fn send_flex_bubble(&self,
+                                   to: &str,
+                                   alt_text: &str,
+                                   bubble: &flex::FlexBubble) -> anyhow::Result<()> {
+        self.send_flex(to, alt_text, &bubble.to_json()).await
+    }
+
+    /// Send flex carousel message using the flex builder types
+    pub async fn send_flex_carousel(&self,
+                                     to: &str,
+                                     alt_text: &str,
+                                     carousel: &flex::FlexCarousel) -> anyhow::Result<()> {
+        self.send_flex(to, alt_text, &carousel.to_json()).await
+    }
+
+    /// Reply with flex bubble message
+    pub async fn reply_flex_bubble(&self,
+                                    reply_token: &str,
+                                    alt_text: &str,
+                                    bubble: &flex::FlexBubble) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "flex",
+            "altText": alt_text,
+            "contents": bubble.to_json()
+        }]);
+        self.send_reply(reply_token, messages).await
+    }
+
     /// Send message with quick reply buttons (new version with all action types)
     pub async fn send_with_quick_reply_actions(&self,
                                                to: &str,
@@ -857,6 +886,89 @@ impl LineChannel {
             .ok_or_else(|| anyhow::anyhow!("No content ID in upload response"))
     }
 
+    /// Upload image with progress tracking callback
+    pub async fn upload_image_with_progress<F>(
+        &self,
+        to: &str,
+        image_data: Vec<u8>,
+        content_type: &str,
+        mut progress_callback: F,
+    ) -> anyhow::Result<String>
+    where
+        F: FnMut(u64, u64), // (bytes_uploaded, total_bytes)
+    {
+        let url = format!("https://api.line.me/v2/bot/message/{to}/upload");
+        let total_bytes = image_data.len() as u64;
+
+        // For chunked upload, we need to use the client with request body
+        // Note: reqwest doesn't support upload progress natively,
+        // so this is a simplified version that calls back at start/end
+        progress_callback(0, total_bytes);
+
+        let resp = self.client
+            .post(&url)
+            .bearer_auth(&self.channel_access_token)
+            .header("Content-Type", content_type)
+            .body(image_data)
+            .send()
+            .await?;
+
+        progress_callback(total_bytes, total_bytes);
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("LINE image upload failed ({status}): {error_body}");
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        json.get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("No content ID in upload response"))
+    }
+
+    /// Upload image with retry on failure
+    pub async fn upload_image_with_retry(&self,
+                                         to: &str,
+                                         image_data: Vec<u8>,
+                                         content_type: &str) -> anyhow::Result<String> {
+        let mut attempt = 0;
+        let max_attempts = self.retry_config.max_retries;
+
+        loop {
+            attempt += 1;
+
+            match self.upload_image(to, image_data.clone(), content_type).await {
+                Ok(id) => return Ok(id),
+                Err(e) => {
+                    if attempt >= max_attempts {
+                        return Err(e);
+                    }
+
+                    let delay = self.calculate_retry_delay(
+                        attempt,
+                        &LineApiError {
+                            status: 500,
+                            code: None,
+                            message: e.to_string(),
+                            retryable: true,
+                            retry_after: None,
+                        }
+                    );
+
+                    tracing::warn!(
+                        "LINE image upload failed (attempt {}/{}), retrying in {:?}",
+                        attempt,
+                        max_attempts,
+                        delay
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Location & Sticker Messages
     // ─────────────────────────────────────────────────────────────────────────────
@@ -994,6 +1106,670 @@ impl Channel for LineChannel {
     }
 }
 
+// =============================================================================
+// Flex Message Builders
+// =============================================================================
+
+/// Flex Message component types and builders
+///
+/// Reference: https://developers.line.biz/en/docs/messaging-api/messages/#flex-messages
+pub mod flex {
+    use super::*;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Component Types
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Base trait for Flex components
+    pub trait FlexComponent {
+        fn component_type(&self) -> &'static str;
+        fn to_json(&self) -> serde_json::Value;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Box Component
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Box container for components
+    #[derive(Debug, Clone)]
+    pub struct FlexBox {
+        pub layout: FlexBoxLayout,
+        pub contents: Vec<FlexComponentData>,
+        pub flex: Option<i32>,
+        pub spacing: Option<String>,
+        pub margin: Option<String>,
+        pub padding_all: Option<String>,
+        pub padding_top: Option<String>,
+        pub padding_bottom: Option<String>,
+        pub padding_start: Option<String>,
+        pub padding_end: Option<String>,
+        pub background_color: Option<String>,
+        pub background_width: Option<String>,
+        pub corner_radius: Option<String>,
+        pub width: Option<String>,
+        pub height: Option<String>,
+        pub align_items: Option<String>,
+        pub justify_content: Option<String>,
+        pub position: Option<String>,
+        pub offset_top: Option<String>,
+        pub offset_bottom: Option<String>,
+        pub offset_start: Option<String>,
+        pub offset_end: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FlexBoxLayout {
+        Horizontal,
+        Vertical,
+        Baseline,
+    }
+
+    impl FlexBox {
+        pub fn new(layout: FlexBoxLayout) -> Self {
+            Self {
+                layout,
+                contents: Vec::new(),
+                flex: None,
+                spacing: None,
+                margin: None,
+                padding_all: None,
+                padding_top: None,
+                padding_bottom: None,
+                padding_start: None,
+                padding_end: None,
+                background_color: None,
+                background_width: None,
+                corner_radius: None,
+                width: None,
+                height: None,
+                align_items: None,
+                justify_content: None,
+                position: None,
+                offset_top: None,
+                offset_bottom: None,
+                offset_start: None,
+                offset_end: None,
+            }
+        }
+
+        pub fn horizontal() -> Self {
+            Self::new(FlexBoxLayout::Horizontal)
+        }
+
+        pub fn vertical() -> Self {
+            Self::new(FlexBoxLayout::Vertical)
+        }
+
+        pub fn add_component(mut self, component: FlexComponentData) -> Self {
+            self.contents.push(component);
+            self
+        }
+
+        pub fn contents(mut self, contents: Vec<FlexComponentData>) -> Self {
+            self.contents = contents;
+            self
+        }
+
+        pub fn flex(mut self, flex: i32) -> Self {
+            self.flex = Some(flex);
+            self
+        }
+
+        pub fn spacing(mut self, spacing: &str) -> Self {
+            self.spacing = Some(spacing.to_string());
+            self
+        }
+
+        pub fn margin(mut self, margin: &str) -> Self {
+            self.margin = Some(margin.to_string());
+            self
+        }
+
+        pub fn padding(mut self, padding: &str) -> Self {
+            self.padding_all = Some(padding.to_string());
+            self
+        }
+
+        pub fn background(mut self, color: &str) -> Self {
+            self.background_color = Some(color.to_string());
+            self
+        }
+
+        pub fn corner_radius(mut self, radius: &str) -> Self {
+            self.corner_radius = Some(radius.to_string());
+            self
+        }
+
+        pub fn to_json(&self) -> serde_json::Value {
+            FlexComponentData::Box(self.clone()).to_json()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Text Component
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Text component
+    #[derive(Debug, Clone)]
+    pub struct FlexText {
+        pub text: String,
+        pub size: Option<String>,
+        pub align: Option<String>,
+        pub gravity: Option<String>,
+        pub wrap: Option<bool>,
+        pub max_lines: Option<u32>,
+        pub weight: Option<String>,
+        pub color: Option<String>,
+        pub margin: Option<String>,
+        pub position: Option<String>,
+        pub offset_top: Option<String>,
+        pub offset_bottom: Option<String>,
+        pub offset_start: Option<String>,
+        pub offset_end: Option<String>,
+        pub line_spacing: Option<String>,
+        pub decoration: Option<String>,
+        pub style: Option<FlexTextStyle>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FlexTextStyle {
+        Normal,
+        Bold,
+        Italic,
+    }
+
+    impl FlexText {
+        pub fn new(text: impl Into<String>) -> Self {
+            Self {
+                text: text.into(),
+                size: None,
+                align: None,
+                gravity: None,
+                wrap: None,
+                max_lines: None,
+                weight: None,
+                color: None,
+                margin: None,
+                position: None,
+                offset_top: None,
+                offset_bottom: None,
+                offset_start: None,
+                offset_end: None,
+                line_spacing: None,
+                decoration: None,
+                style: None,
+            }
+        }
+
+        pub fn size(mut self, size: &str) -> Self {
+            self.size = Some(size.to_string());
+            self
+        }
+
+        pub fn align(mut self, align: &str) -> Self {
+            self.align = Some(align.to_string());
+            self
+        }
+
+        pub fn color(mut self, color: &str) -> Self {
+            self.color = Some(color.to_string());
+            self
+        }
+
+        pub fn bold(mut self) -> Self {
+            self.weight = Some("bold".to_string());
+            self
+        }
+
+        pub fn wrap(mut self) -> Self {
+            self.wrap = Some(true);
+            self
+        }
+
+        pub fn max_lines(mut self, lines: u32) -> Self {
+            self.max_lines = Some(lines);
+            self
+        }
+
+        pub fn margin(mut self, margin: &str) -> Self {
+            self.margin = Some(margin.to_string());
+            self
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Image Component
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Image component
+    #[derive(Debug, Clone)]
+    pub struct FlexImage {
+        pub url: String,
+        pub flex: Option<i32>,
+        pub margin: Option<String>,
+        pub align_items: Option<String>,
+        pub gravity: Option<String>,
+        pub aspect_ratio: Option<String>,
+        pub aspect_mode: Option<String>,
+        pub size: Option<String>,
+        pub position: Option<String>,
+        pub offset_top: Option<String>,
+        pub offset_bottom: Option<String>,
+        pub offset_start: Option<String>,
+        pub offset_end: Option<String>,
+    }
+
+    impl FlexImage {
+        pub fn new(url: impl Into<String>) -> Self {
+            Self {
+                url: url.into(),
+                flex: None,
+                margin: None,
+                align_items: None,
+                gravity: None,
+                aspect_ratio: None,
+                aspect_mode: None,
+                size: None,
+                position: None,
+                offset_top: None,
+                offset_bottom: None,
+                offset_start: None,
+                offset_end: None,
+            }
+        }
+
+        pub fn flex(mut self, flex: i32) -> Self {
+            self.flex = Some(flex);
+            self
+        }
+
+        pub fn margin(mut self, margin: &str) -> Self {
+            self.margin = Some(margin.to_string());
+            self
+        }
+
+        pub fn aspect_ratio(mut self, ratio: &str) -> Self {
+            self.aspect_ratio = Some(ratio.to_string());
+            self
+        }
+
+        pub fn size(mut self, size: &str) -> Self {
+            self.size = Some(size.to_string());
+            self
+        }
+
+        pub fn to_json(&self) -> serde_json::Value {
+            FlexComponentData::Image(self.clone()).to_json()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Button Component
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Button component
+    #[derive(Debug, Clone)]
+    pub struct FlexButton {
+        pub action: TemplateAction,
+        pub style: Option<FlexButtonStyle>,
+        pub flex: Option<i32>,
+        pub margin: Option<String>,
+        pub height: Option<String>,
+        pub position: Option<String>,
+        pub offset_top: Option<String>,
+        pub offset_bottom: Option<String>,
+        pub offset_start: Option<String>,
+        pub offset_end: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FlexButtonStyle {
+        Link,
+        Primary,
+        Secondary,
+    }
+
+    impl FlexButton {
+        pub fn new(action: TemplateAction) -> Self {
+            Self {
+                action,
+                style: None,
+                flex: None,
+                margin: None,
+                height: None,
+                position: None,
+                offset_top: None,
+                offset_bottom: None,
+                offset_start: None,
+                offset_end: None,
+            }
+        }
+
+        pub fn style(mut self, style: FlexButtonStyle) -> Self {
+            self.style = Some(style);
+            self
+        }
+
+        pub fn margin(mut self, margin: &str) -> Self {
+            self.margin = Some(margin.to_string());
+            self
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Icon Component
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Icon component
+    #[derive(Debug, Clone)]
+    pub struct FlexIcon {
+        pub url: String,
+        pub margin: Option<String>,
+        pub size: Option<String>,
+        pub aspect_ratio: Option<String>,
+        pub position: Option<String>,
+    }
+
+    impl FlexIcon {
+        pub fn new(url: impl Into<String>) -> Self {
+            Self {
+                url: url.into(),
+                margin: None,
+                size: None,
+                aspect_ratio: None,
+                position: None,
+            }
+        }
+
+        pub fn size(mut self, size: &str) -> Self {
+            self.size = Some(size.to_string());
+            self
+        }
+
+        pub fn margin(mut self, margin: &str) -> Self {
+            self.margin = Some(margin.to_string());
+            self
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Separator & Spacer
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Separator component
+    #[derive(Debug, Clone)]
+    pub struct FlexSeparator {
+        pub margin: Option<String>,
+        pub color: Option<String>,
+    }
+
+    impl FlexSeparator {
+        pub fn new() -> Self {
+            Self {
+                margin: None,
+                color: None,
+            }
+        }
+
+        pub fn margin(mut self, margin: &str) -> Self {
+            self.margin = Some(margin.to_string());
+            self
+        }
+
+        pub fn color(mut self, color: &str) -> Self {
+            self.color = Some(color.to_string());
+            self
+        }
+    }
+
+    /// Spacer component
+    #[derive(Debug, Clone)]
+    pub struct FlexSpacer {
+        pub size: String,
+    }
+
+    impl FlexSpacer {
+        pub fn new(size: &str) -> Self {
+            Self {
+                size: size.to_string(),
+            }
+        }
+    }
+
+    /// Filler component (takes up available space)
+    #[derive(Debug, Clone)]
+    pub struct FlexFiller;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Component Data (enum for all component types)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Enum holding any Flex component type
+    #[derive(Debug, Clone)]
+    pub enum FlexComponentData {
+        Box(FlexBox),
+        Text(FlexText),
+        Image(FlexImage),
+        Button(FlexButton),
+        Icon(FlexIcon),
+        Separator(FlexSeparator),
+        Spacer(FlexSpacer),
+        Filler(FlexFiller),
+    }
+
+    impl FlexComponentData {
+        pub fn to_json(&self) -> serde_json::Value {
+            match self {
+                FlexComponentData::Box(b) => {
+                    let mut json = serde_json::json!({
+                        "type": "box",
+                        "layout": match b.layout {
+                            FlexBoxLayout::Horizontal => "horizontal",
+                            FlexBoxLayout::Vertical => "vertical",
+                            FlexBoxLayout::Baseline => "baseline",
+                        },
+                        "contents": b.contents.iter().map(|c| c.to_json()).collect::<Vec<_>>()
+                    });
+                    if let Some(f) = b.flex { json["flex"] = serde_json::json!(f); }
+                    if let Some(s) = &b.spacing { json["spacing"] = serde_json::json!(s); }
+                    if let Some(m) = &b.margin { json["margin"] = serde_json::json!(m); }
+                    if let Some(p) = &b.padding_all { json["paddingAll"] = serde_json::json!(p); }
+                    if let Some(c) = &b.background_color { json["backgroundColor"] = serde_json::json!(c); }
+                    if let Some(r) = &b.corner_radius { json["cornerRadius"] = serde_json::json!(r); }
+                    if let Some(w) = &b.width { json["width"] = serde_json::json!(w); }
+                    if let Some(h) = &b.height { json["height"] = serde_json::json!(h); }
+                    json
+                }
+                FlexComponentData::Text(t) => {
+                    let mut json = serde_json::json!({
+                        "type": "text",
+                        "text": t.text
+                    });
+                    if let Some(s) = &t.size { json["size"] = serde_json::json!(s); }
+                    if let Some(a) = &t.align { json["align"] = serde_json::json!(a); }
+                    if let Some(c) = &t.color { json["color"] = serde_json::json!(c); }
+                    if let Some(w) = &t.weight { json["weight"] = serde_json::json!(w); }
+                    if let Some(m) = &t.margin { json["margin"] = serde_json::json!(m); }
+                    if let Some(w) = t.wrap { json["wrap"] = serde_json::json!(w); }
+                    if let Some(m) = t.max_lines { json["maxLines"] = serde_json::json!(m); }
+                    json
+                }
+                FlexComponentData::Image(i) => {
+                    let mut json = serde_json::json!({
+                        "type": "image",
+                        "url": i.url
+                    });
+                    if let Some(f) = i.flex { json["flex"] = serde_json::json!(f); }
+                    if let Some(m) = &i.margin { json["margin"] = serde_json::json!(m); }
+                    if let Some(r) = &i.aspect_ratio { json["aspectRatio"] = serde_json::json!(r); }
+                    if let Some(s) = &i.size { json["size"] = serde_json::json!(s); }
+                    json
+                }
+                FlexComponentData::Button(b) => {
+                    let mut json = serde_json::json!({
+                        "type": "button",
+                        "action": b.action.to_json()
+                    });
+                    if let Some(s) = b.style {
+                        json["style"] = serde_json::json!(match s {
+                            FlexButtonStyle::Link => "link",
+                            FlexButtonStyle::Primary => "primary",
+                            FlexButtonStyle::Secondary => "secondary",
+                        });
+                    }
+                    if let Some(m) = &b.margin { json["margin"] = serde_json::json!(m); }
+                    json
+                }
+                FlexComponentData::Icon(i) => {
+                    let mut json = serde_json::json!({
+                        "type": "icon",
+                        "url": i.url
+                    });
+                    if let Some(s) = &i.size { json["size"] = serde_json::json!(s); }
+                    if let Some(m) = &i.margin { json["margin"] = serde_json::json!(m); }
+                    json
+                }
+                FlexComponentData::Separator(s) => {
+                    let mut json = serde_json::json!({"type": "separator"});
+                    if let Some(m) = &s.margin { json["margin"] = serde_json::json!(m); }
+                    if let Some(c) = &s.color { json["color"] = serde_json::json!(c); }
+                    json
+                }
+                FlexComponentData::Spacer(s) => serde_json::json!({
+                    "type": "spacer",
+                    "size": s.size
+                }),
+                FlexComponentData::Filler(_) => serde_json::json!({"type": "filler"}),
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Container Types
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Bubble container for Flex messages
+    #[derive(Debug, Clone)]
+    pub struct FlexBubble {
+        pub header: Option<FlexBox>,
+        pub hero: Option<FlexImage>,
+        pub body: FlexBox,
+        pub footer: Option<FlexBox>,
+        pub styles: Option<FlexBubbleStyles>,
+        pub direction: Option<FlexDirection>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FlexDirection {
+        LeftToRight,
+        RightToLeft,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct FlexBubbleStyles {
+        pub header: Option<FlexBlockStyle>,
+        pub hero: Option<FlexBlockStyle>,
+        pub body: Option<FlexBlockStyle>,
+        pub footer: Option<FlexBlockStyle>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct FlexBlockStyle {
+        pub background_color: Option<String>,
+        pub separator: Option<bool>,
+        pub separator_color: Option<String>,
+    }
+
+    impl FlexBubble {
+        pub fn new(body: FlexBox) -> Self {
+            Self {
+                header: None,
+                hero: None,
+                body,
+                footer: None,
+                styles: None,
+                direction: None,
+            }
+        }
+
+        pub fn header(mut self, header: FlexBox) -> Self {
+            self.header = Some(header);
+            self
+        }
+
+        pub fn hero(mut self, hero: FlexImage) -> Self {
+            self.hero = Some(hero);
+            self
+        }
+
+        pub fn footer(mut self, footer: FlexBox) -> Self {
+            self.footer = Some(footer);
+            self
+        }
+
+        pub fn direction(mut self, direction: FlexDirection) -> Self {
+            self.direction = Some(direction);
+            self
+        }
+
+        pub fn to_json(&self) -> serde_json::Value {
+            let mut json = serde_json::json!({
+                "type": "bubble",
+                "body": self.body.to_json()
+            });
+
+            if let Some(header) = &self.header {
+                json["header"] = header.to_json();
+            }
+            if let Some(hero) = &self.hero {
+                json["hero"] = hero.to_json();
+            }
+            if let Some(footer) = &self.footer {
+                json["footer"] = footer.to_json();
+            }
+            if let Some(direction) = self.direction {
+                json["direction"] = serde_json::json!(match direction {
+                    FlexDirection::LeftToRight => "ltr",
+                    FlexDirection::RightToLeft => "rtl",
+                });
+            }
+
+            json
+        }
+    }
+
+    /// Carousel container for Flex messages
+    #[derive(Debug, Clone)]
+    pub struct FlexCarousel {
+        pub contents: Vec<FlexBubble>,
+    }
+
+    impl FlexCarousel {
+        pub fn new() -> Self {
+            Self {
+                contents: Vec::new(),
+            }
+        }
+
+        pub fn add_bubble(mut self, bubble: FlexBubble) -> Self {
+            self.contents.push(bubble);
+            self
+        }
+
+        pub fn contents(mut self, contents: Vec<FlexBubble>) -> Self {
+            self.contents = contents;
+            self
+        }
+
+        pub fn to_json(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "carousel",
+                "contents": self.contents.iter().map(|b| b.to_json()).collect::<Vec<_>>()
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1076,5 +1852,153 @@ mod tests {
         };
         assert_eq!(item.label, "Yes");
         assert_eq!(item.text, "yes");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Retry Configuration Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_retry_config_default() {
+        let config = LineRetryConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.initial_delay, Duration::from_millis(500));
+        assert_eq!(config.max_delay, Duration::from_secs(10));
+        assert_eq!(config.backoff_multiplier, 2.0);
+    }
+
+    #[test]
+    fn line_channel_with_custom_retry() {
+        let retry_config = LineRetryConfig {
+            max_retries: 5,
+            initial_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(30),
+            backoff_multiplier: 3.0,
+        };
+        let ch = LineChannel::with_retry_config("token".into(), "secret".into(), vec![], retry_config.clone());
+        assert_eq!(ch.retry_config().max_retries, 5);
+        assert_eq!(ch.retry_config().initial_delay, Duration::from_millis(100));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Quick Reply Action Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_quick_reply_action_message() {
+        let action = QuickReplyAction::Message {
+            label: "OK".into(),
+            text: "ok".into(),
+        };
+        let json = action.to_json();
+        assert_eq!(json["type"], "action");
+        assert_eq!(json["action"]["type"], "message");
+        assert_eq!(json["action"]["label"], "OK");
+        assert_eq!(json["action"]["text"], "ok");
+    }
+
+    #[test]
+    fn line_quick_reply_action_postback() {
+        let action = QuickReplyAction::Postback {
+            label: "Select".into(),
+            data: "value=123".into(),
+            text: Some("Selected".into()),
+        };
+        let json = action.to_json();
+        assert_eq!(json["action"]["type"], "postback");
+        assert_eq!(json["action"]["data"], "value=123");
+        assert_eq!(json["action"]["text"], "Selected");
+    }
+
+    #[test]
+    fn line_quick_reply_action_uri() {
+        let action = QuickReplyAction::Uri {
+            label: "Open".into(),
+            uri: "https://example.com".into(),
+            alt_uri: None,
+        };
+        let json = action.to_json();
+        assert_eq!(json["action"]["type"], "uri");
+        assert_eq!(json["action"]["uri"], "https://example.com");
+    }
+
+    #[test]
+    fn line_quick_reply_action_date_picker() {
+        let action = QuickReplyAction::DatePicker {
+            label: "Pick Date".into(),
+            data: "date".into(),
+            initial: Some("2023-01-01".into()),
+            max: Some("2023-12-31".into()),
+            min: Some("2023-01-01".into()),
+        };
+        let json = action.to_json();
+        assert_eq!(json["action"]["type"], "datepicker");
+        assert_eq!(json["action"]["initial"], "2023-01-01");
+        assert_eq!(json["action"]["max"], "2023-12-31");
+        assert_eq!(json["action"]["min"], "2023-01-01");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Template Action Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_template_action_message() {
+        let action = TemplateAction::Message {
+            label: "Click".into(),
+            text: "clicked".into(),
+        };
+        let json = action.to_json();
+        assert_eq!(json["type"], "message");
+        assert_eq!(json["label"], "Click");
+        assert_eq!(json["text"], "clicked");
+    }
+
+    #[test]
+    fn line_template_action_postback() {
+        let action = TemplateAction::Postback {
+            label: "Submit".into(),
+            data: "data=value".into(),
+            text: Some("Submitted".into()),
+        };
+        let json = action.to_json();
+        assert_eq!(json["type"], "postback");
+        assert_eq!(json["data"], "data=value");
+        assert_eq!(json["text"], "Submitted");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // LineApiError Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_api_error_display() {
+        let error = LineApiError {
+            status: 429,
+            code: Some("RATE_LIMIT".into()),
+            message: "Too many requests".into(),
+            retryable: true,
+            retry_after: Some(Duration::from_secs(60)),
+        };
+        let display = format!("{}", error);
+        assert!(display.contains("429"));
+        assert!(display.contains("RATE_LIMIT"));
+        assert!(display.contains("Too many requests"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Rate Limit Info Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_rate_limit_info() {
+        let info = LineRateLimitInfo {
+            limit: 1000,
+            remaining: 500,
+            reset_at: 1234567890,
+        };
+        assert_eq!(info.limit, 1000);
+        assert_eq!(info.remaining, 500);
+        assert_eq!(info.reset_at, 1234567890);
     }
 }

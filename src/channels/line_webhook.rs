@@ -426,4 +426,227 @@ mod tests {
         assert!(json.contains("\"type\":\"text\""));
         assert!(json.contains("\"text\":\"test\""));
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Postback Event Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn webhook_parse_postback_event() {
+        let json = r#"{
+            "destination": "U123",
+            "events": [{
+                "type": "postback",
+                "mode": "active",
+                "timestamp": 1234567890,
+                "source": {
+                    "type": "user",
+                    "userId": "Uabc123"
+                },
+                "postback": {
+                    "data": "action=buy&item=123"
+                },
+                "replyToken": "reply_token"
+            }]
+        }"#;
+
+        let webhook: LineWebhook = serde_json::from_str(json).unwrap();
+        assert_eq!(webhook.events[0].event_type, WebhookEventType::Postback);
+        assert_eq!(webhook.events[0].postback.as_ref().unwrap().data, "action=buy&item=123");
+    }
+
+    #[test]
+    fn webhook_postback_parse_data() {
+        let postback = WebhookPostback {
+            data: "action=buy&item=123&qty=2".into(),
+            params: None,
+        };
+        let parsed = postback.parse_data();
+        assert_eq!(parsed.get("action"), Some(&"buy".to_string()));
+        assert_eq!(parsed.get("item"), Some(&"123".to_string()));
+        assert_eq!(parsed.get("qty"), Some(&"2".to_string()));
+    }
+
+    #[test]
+    fn webhook_postback_get_param() {
+        let postback = WebhookPostback {
+            data: "key=value&foo=bar".into(),
+            params: None,
+        };
+        assert_eq!(postback.get_param("key"), Some("value".to_string()));
+        assert_eq!(postback.get_param("foo"), Some("bar".to_string()));
+        assert_eq!(postback.get_param("missing"), None);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Follow/Unfollow Event Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn webhook_parse_follow_event() {
+        let json = r#"{
+            "destination": "U123",
+            "events": [{
+                "type": "follow",
+                "mode": "active",
+                "timestamp": 1234567890,
+                "source": {
+                    "type": "user",
+                    "userId": "Uabc123"
+                },
+                "replyToken": "reply_token"
+            }]
+        }"#;
+
+        let webhook: LineWebhook = serde_json::from_str(json).unwrap();
+        assert_eq!(webhook.events[0].event_type, WebhookEventType::Follow);
+    }
+
+    #[test]
+    fn webhook_parse_unfollow_event() {
+        let json = r#"{
+            "destination": "U123",
+            "events": [{
+                "type": "unfollow",
+                "mode": "active",
+                "timestamp": 1234567890,
+                "source": {
+                    "type": "user",
+                    "userId": "Uabc123"
+                }
+            }]
+        }"#;
+
+        let webhook: LineWebhook = serde_json::from_str(json).unwrap();
+        assert_eq!(webhook.events[0].event_type, WebhookEventType::Unfollow);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WebhookSource Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn webhook_source_user() {
+        let source = WebhookSource {
+            source_type: "user".into(),
+            user_id: "U123".into(),
+            group_id: None,
+            room_id: None,
+        };
+        assert_eq!(source.source_id(), "U123");
+        assert!(source.is_direct());
+        assert!(!source.is_group());
+        assert!(!source.is_room());
+    }
+
+    #[test]
+    fn webhook_source_group() {
+        let source = WebhookSource {
+            source_type: "group".into(),
+            user_id: "U123".into(),
+            group_id: Some("G456".into()),
+            room_id: None,
+        };
+        assert_eq!(source.source_id(), "G456");
+        assert!(!source.is_direct());
+        assert!(source.is_group());
+        assert!(!source.is_room());
+    }
+
+    #[test]
+    fn webhook_source_room() {
+        let source = WebhookSource {
+            source_type: "room".into(),
+            user_id: "U123".into(),
+            group_id: None,
+            room_id: Some("R789".into()),
+        };
+        assert_eq!(source.source_id(), "R789");
+        assert!(!source.is_direct());
+        assert!(!source.is_group());
+        assert!(source.is_room());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ParsedEvent Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn webhook_parse_message_to_parsed_event() {
+        let json = r#"{
+            "type": "message",
+            "mode": "active",
+            "timestamp": 1234567890,
+            "source": {
+                "type": "user",
+                "userId": "Uabc123"
+            },
+            "message": {
+                "type": "text",
+                "id": "msg_id",
+                "text": "Hello World"
+            },
+            "replyToken": "reply_token"
+        }"#;
+
+        let event: WebhookEvent = serde_json::from_str(json).unwrap();
+        let parsed = event.parse();
+
+        match parsed {
+            ParsedEvent::Message { source, text, .. } => {
+                assert_eq!(source.user_id, "Uabc123");
+                assert_eq!(text, "Hello World");
+            }
+            _ => panic!("Expected Message event"),
+        }
+    }
+
+    #[test]
+    fn webhook_parse_postback_to_parsed_event() {
+        let json = r#"{
+            "type": "postback",
+            "mode": "active",
+            "timestamp": 1234567890,
+            "source": {
+                "type": "user",
+                "userId": "Uabc123"
+            },
+            "postback": {
+                "data": "data=test"
+            },
+            "replyToken": "reply_token"
+        }"#;
+
+        let event: WebhookEvent = serde_json::from_str(json).unwrap();
+        let parsed = event.parse();
+
+        match parsed {
+            ParsedEvent::Postback { data, .. } => {
+                assert_eq!(data, "data=test");
+            }
+            _ => panic!("Expected Postback event"),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Event Type Helper Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn webhook_event_type_should_respond() {
+        assert!(WebhookEventType::Message.should_respond());
+        assert!(WebhookEventType::Postback.should_respond());
+        assert!(WebhookEventType::Follow.should_respond());
+        assert!(WebhookEventType::MemberJoined.should_respond());
+        assert!(!WebhookEventType::Unfollow.should_respond());
+        assert!(!WebhookEventType::Beacon.should_respond());
+    }
+
+    #[test]
+    fn webhook_event_type_has_reply_token() {
+        assert!(WebhookEventType::Message.has_reply_token());
+        assert!(WebhookEventType::Postback.has_reply_token());
+        assert!(WebhookEventType::Follow.has_reply_token());
+        assert!(!WebhookEventType::Unfollow.has_reply_token());
+    }
 }
