@@ -4,8 +4,72 @@ use base64::Engine;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// LINE API rate limit information from response headers
+#[derive(Debug, Clone)]
+pub struct LineRateLimitInfo {
+    /// API call limit per unit (e.g., 1000)
+    pub limit: u64,
+    /// Remaining calls allowed
+    pub remaining: u64,
+    /// Epoch time when limit resets
+    pub reset_at: u64,
+}
+
+/// LINE API error information
+#[derive(Debug, Clone)]
+pub struct LineApiError {
+    /// HTTP status code
+    pub status: u16,
+    /// LINE error code (e.g., "INVALID_TOKEN")
+    pub code: Option<String>,
+    /// Human-readable error message
+    pub message: String,
+    /// Whether this error is retryable
+    pub retryable: bool,
+    /// Suggested retry delay (if provided by API)
+    pub retry_after: Option<Duration>,
+}
+
+impl std::fmt::Display for LineApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LINE API error ({}): ", self.status)?;
+        if let Some(ref code) = self.code {
+            write!(f, "[{}] ", code)?;
+        }
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for LineApiError {}
+
+/// Retry configuration for LINE API calls
+#[derive(Debug, Clone)]
+pub struct LineRetryConfig {
+    /// Maximum number of retry attempts
+    pub max_retries: u32,
+    /// Initial retry delay
+    pub initial_delay: Duration,
+    /// Maximum retry delay
+    pub max_delay: Duration,
+    /// Exponential backoff multiplier
+    pub backoff_multiplier: f64,
+}
+
+impl Default for LineRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(10),
+            backoff_multiplier: 2.0,
+        }
+    }
+}
 
 /// LINE channel — receives messages via webhook, sends via Messaging API
 pub struct LineChannel {
@@ -13,6 +77,12 @@ pub struct LineChannel {
     channel_secret: String,
     allowed_users: Vec<String>,
     client: reqwest::Client,
+    /// Retry configuration
+    retry_config: LineRetryConfig,
+    /// Rate limit tracking (remaining calls)
+    rate_limit_remaining: AtomicU64,
+    /// Rate limit reset time (epoch seconds)
+    rate_limit_reset_at: AtomicU64,
 }
 
 impl LineChannel {
@@ -24,6 +94,50 @@ impl LineChannel {
             channel_secret,
             allowed_users,
             client: reqwest::Client::new(),
+            retry_config: LineRetryConfig::default(),
+            rate_limit_remaining: AtomicU64::new(u64::MAX),
+            rate_limit_reset_at: AtomicU64::new(0),
+        }
+    }
+
+    /// Create a new LineChannel with custom retry configuration
+    pub fn with_retry_config(channel_access_token: String,
+                            channel_secret: String,
+                            allowed_users: Vec<String>,
+                            retry_config: LineRetryConfig) -> Self {
+        Self {
+            channel_access_token,
+            channel_secret,
+            allowed_users,
+            client: reqwest::Client::new(),
+            retry_config,
+            rate_limit_remaining: AtomicU64::new(u64::MAX),
+            rate_limit_reset_at: AtomicU64::new(0),
+        }
+    }
+
+    /// Get the current retry configuration
+    pub fn retry_config(&self) -> &LineRetryConfig {
+        &self.retry_config
+    }
+
+    /// Update the retry configuration
+    pub fn set_retry_config(&mut self, config: LineRetryConfig) {
+        self.retry_config = config;
+    }
+
+    /// Get rate limit information (if known from recent API calls)
+    pub fn rate_limit_info(&self) -> Option<LineRateLimitInfo> {
+        let reset_at = self.rate_limit_reset_at.load(Ordering::Relaxed);
+        let remaining = self.rate_limit_remaining.load(Ordering::Relaxed);
+        if reset_at > 0 {
+            Some(LineRateLimitInfo {
+                limit: 1000, // LINE's typical limit
+                remaining,
+                reset_at,
+            })
+        } else {
+            None
         }
     }
 
@@ -50,47 +164,225 @@ impl LineChannel {
         self.allowed_users.iter().any(|u| u == "*" || u == user_id)
     }
 
-    /// Send reply message to LINE
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Error Handling & Retry Logic
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Update rate limit info from response headers
+    fn update_rate_limit_from_headers(&self, headers: &reqwest::header::HeaderMap) {
+        if let Some(remaining) = headers.get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            self.rate_limit_remaining.store(remaining, Ordering::Relaxed);
+        }
+        if let Some(reset) = headers.get("x-ratelimit-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            self.rate_limit_reset_at.store(reset, Ordering::Relaxed);
+        }
+    }
+
+    /// Parse LINE API error response
+    fn parse_api_error(&self, status: reqwest::StatusCode, body: &str) -> LineApiError {
+        let status_code = status.as_u16();
+
+        // Try to parse LINE's error format
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+            let message = json.get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error")
+                .to_string();
+            let code = json.get("error")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let retryable = match status_code {
+                429 => true,  // Rate limit
+                500..=599 => true,  // Server errors
+                408 => true,  // Request timeout
+                _ => false,
+            };
+
+            // Note: retry-after header should be extracted from response headers
+            // before calling this function. We don't have headers here.
+            let retry_after = None;
+
+            return LineApiError {
+                status: status_code,
+                code,
+                message,
+                retryable,
+                retry_after,
+            };
+        }
+
+        // Fallback for non-JSON responses
+        let retryable = matches!(status_code, 429 | 408 | 500..=599);
+        LineApiError {
+            status: status_code,
+            code: None,
+            message: body.to_string(),
+            retryable,
+            retry_after: None,
+        }
+    }
+
+    /// Check if we should retry based on the error
+    fn should_retry(&self, error: &LineApiError, attempt: u32) -> bool {
+        if attempt >= self.retry_config.max_retries {
+            return false;
+        }
+        error.retryable
+    }
+
+    /// Calculate retry delay with exponential backoff
+    fn calculate_retry_delay(&self, attempt: u32, error: &LineApiError) -> Duration {
+        // Use API-provided retry-after if available
+        if let Some(delay) = error.retry_after {
+            return delay;
+        }
+
+        // Exponential backoff
+        let base_delay = self.retry_config.initial_delay.as_millis() as f64;
+        let exponential_delay = base_delay * self.retry_config.backoff_multiplier.powi(attempt as i32);
+        let delay_ms = exponential_delay as u64;
+
+        // Cap at max delay
+        let max_delay_ms = self.retry_config.max_delay.as_millis() as u64;
+        Duration::from_millis(delay_ms.min(max_delay_ms))
+    }
+
+    /// Execute an HTTP request with retry logic
+    async fn send_http_with_retry(
+        &self,
+        url: &str,
+        body: serde_json::Value,
+    ) -> anyhow::Result<reqwest::Response> {
+        let mut attempt = 0;
+
+        loop {
+            attempt += 1;
+
+            // Check rate limit before making request
+            let remaining = self.rate_limit_remaining.load(Ordering::Relaxed);
+            let reset_at = self.rate_limit_reset_at.load(Ordering::Relaxed);
+            if remaining < 10 && reset_at > 0 {
+                let now = chrono::Utc::now().timestamp() as u64;
+                if reset_at > now {
+                    let wait_secs = reset_at - now;
+                    tracing::warn!("LINE API rate limit approached, waiting {}s", wait_secs);
+                    tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+                }
+            }
+
+            // Build and send request
+            match self.client
+                .post(url)
+                .bearer_auth(&self.channel_access_token)
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status();
+
+                    // Update rate limit info
+                    self.update_rate_limit_from_headers(resp.headers());
+
+                    if status.is_success() {
+                        return Ok(resp);
+                    }
+
+                    // Handle error
+                    let error_body = resp.text().await.unwrap_or_default();
+                    let error = self.parse_api_error(status, &error_body);
+
+                    if self.should_retry(&error, attempt) {
+                        let delay = self.calculate_retry_delay(attempt, &error);
+                        tracing::warn!(
+                            "LINE API request failed (attempt {}/{}): {}, retrying in {:?}",
+                            attempt,
+                            self.retry_config.max_retries,
+                            error,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+
+                    return Err(anyhow::anyhow!(error));
+                }
+                Err(e) => {
+                    // Network or other error
+                    if attempt < self.retry_config.max_retries {
+                        let delay = self.calculate_retry_delay(attempt, &LineApiError {
+                            status: 0,
+                            code: None,
+                            message: e.to_string(),
+                            retryable: true,
+                            retry_after: None,
+                        });
+                        tracing::warn!(
+                            "LINE API network error (attempt {}/{}): {}, retrying in {:?}",
+                            attempt,
+                            self.retry_config.max_retries,
+                            e,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Core Send Methods (with retry)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Send reply message to LINE (with retry)
     async fn send_reply(&self, reply_token: &str, messages: serde_json::Value) -> anyhow::Result<()> {
         let body = serde_json::json!({
             "replyToken": reply_token,
             "messages": messages
         });
 
-        let resp = self.client
-            .post("https://api.line.me/v2/bot/message/reply")
-            .bearer_auth(&self.channel_access_token)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = self.send_http_with_retry(
+            "https://api.line.me/v2/bot/message/reply",
+            body,
+        ).await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LINE reply API failed ({status}): {error_body}");
+            let error = self.parse_api_error(status, &error_body);
+            return Err(anyhow::anyhow!(error));
         }
 
         Ok(())
     }
 
-    /// Send push message to LINE (proactive)
+    /// Send push message to LINE (with retry)
     async fn send_push(&self, to: &str, messages: serde_json::Value) -> anyhow::Result<()> {
         let body = serde_json::json!({
             "to": to,
             "messages": messages
         });
 
-        let resp = self.client
-            .post("https://api.line.me/v2/bot/message/push")
-            .bearer_auth(&self.channel_access_token)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = self.send_http_with_retry(
+            "https://api.line.me/v2/bot/message/push",
+            body,
+        ).await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let error_body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("LINE push API failed ({status}): {error_body}");
+            let error = self.parse_api_error(status, &error_body);
+            return Err(anyhow::anyhow!(error));
         }
 
         Ok(())
