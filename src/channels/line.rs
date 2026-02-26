@@ -97,13 +97,210 @@ impl LineChannel {
     }
 }
 
-/// Quick reply item for LINE messages
+// =============================================================================
+// Message Builders
+// =============================================================================
+
+/// Quick reply action types for LINE messages
+#[derive(Debug, Clone)]
+pub enum QuickReplyAction {
+    /// Message action - sends a text message when tapped
+    Message { label: String, text: String },
+    /// Postback action - sends data via postback event
+    Postback { label: String, data: String, text: Option<String> },
+    /// URI action - opens a URL
+    Uri { label: String, uri: String, alt_uri: Option<String> },
+    /// Date picker action - sends date value
+    DatePicker { label: String, data: String, initial: Option<String>, max: Option<String>, min: Option<String> },
+    /// Time picker action - sends time value
+    TimePicker { label: String, data: String, initial: Option<String> },
+    /// Datetime picker action - sends datetime value
+    DateTimePicker { label: String, data: String, initial: Option<String>, max: Option<String>, min: Option<String> },
+}
+
+impl QuickReplyAction {
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            QuickReplyAction::Message { label, text } => serde_json::json!({
+                "type": "action",
+                "action": {
+                    "type": "message",
+                    "label": label,
+                    "text": text
+                }
+            }),
+            QuickReplyAction::Postback { label, data, text } => {
+                let mut action = serde_json::json!({
+                    "type": "postback",
+                    "label": label,
+                    "data": data
+                });
+                if let Some(text) = text {
+                    action["text"] = serde_json::json!(text);
+                }
+                serde_json::json!({
+                    "type": "action",
+                    "action": action
+                })
+            }
+            QuickReplyAction::Uri { label, uri, alt_uri } => {
+                let mut action = serde_json::json!({
+                    "type": "uri",
+                    "label": label,
+                    "uri": uri
+                });
+                if let Some(alt_uri) = alt_uri {
+                    action["altUri"] = serde_json::json!({ "desktop": alt_uri });
+                }
+                serde_json::json!({
+                    "type": "action",
+                    "action": action
+                })
+            }
+            QuickReplyAction::DatePicker { label, data, initial, max, min } => {
+                let mut action = serde_json::json!({
+                    "type": "datepicker",
+                    "label": label,
+                    "data": data
+                });
+                if let Some(initial) = initial {
+                    action["initial"] = serde_json::json!(initial);
+                }
+                if let Some(max) = max {
+                    action["max"] = serde_json::json!(max);
+                }
+                if let Some(min) = min {
+                    action["min"] = serde_json::json!(min);
+                }
+                serde_json::json!({
+                    "type": "action",
+                    "action": action
+                })
+            }
+            QuickReplyAction::TimePicker { label, data, initial } => {
+                let mut action = serde_json::json!({
+                    "type": "timepicker",
+                    "label": label,
+                    "data": data
+                });
+                if let Some(initial) = initial {
+                    action["initial"] = serde_json::json!(initial);
+                }
+                serde_json::json!({
+                    "type": "action",
+                    "action": action
+                })
+            }
+            QuickReplyAction::DateTimePicker { label, data, initial, max, min } => {
+                let mut action = serde_json::json!({
+                    "type": "datetimepicker",
+                    "label": label,
+                    "data": data
+                });
+                if let Some(initial) = initial {
+                    action["initial"] = serde_json::json!(initial);
+                }
+                if let Some(max) = max {
+                    action["max"] = serde_json::json!(max);
+                }
+                if let Some(min) = min {
+                    action["min"] = serde_json::json!(min);
+                }
+                serde_json::json!({
+                    "type": "action",
+                    "action": action
+                })
+            }
+        }
+    }
+}
+
+/// Action for template message buttons
+#[derive(Debug, Clone)]
+pub enum TemplateAction {
+    Message { label: String, text: String },
+    Postback { label: String, data: String, text: Option<String> },
+    Uri { label: String, uri: String, alt_uri: Option<String> },
+    DatetimePicker { label: String, data: String, mode: String, initial: Option<String>, max: Option<String>, min: Option<String> },
+}
+
+impl TemplateAction {
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            TemplateAction::Message { label, text } => serde_json::json!({
+                "type": "message",
+                "label": label,
+                "text": text
+            }),
+            TemplateAction::Postback { label, data, text } => {
+                let mut action = serde_json::json!({
+                    "type": "postback",
+                    "label": label,
+                    "data": data
+                });
+                if let Some(text) = text {
+                    action["text"] = serde_json::json!(text);
+                }
+                action
+            }
+            TemplateAction::Uri { label, uri, alt_uri } => {
+                let mut action = serde_json::json!({
+                    "type": "uri",
+                    "label": label,
+                    "uri": uri
+                });
+                if let Some(alt_uri) = alt_uri {
+                    action["altUri"] = serde_json::json!({ "desktop": alt_uri });
+                }
+                action
+            }
+            TemplateAction::DatetimePicker { label, data, mode, initial, max, min } => {
+                let mut action = serde_json::json!({
+                    "type": "datetimepicker",
+                    "label": label,
+                    "data": data,
+                    "mode": mode
+                });
+                if let Some(initial) = initial {
+                    action["initial"] = serde_json::json!(initial);
+                }
+                if let Some(max) = max {
+                    action["max"] = serde_json::json!(max);
+                }
+                if let Some(min) = min {
+                    action["min"] = serde_json::json!(min);
+                }
+                action
+            }
+        }
+    }
+}
+
+/// Template message column for carousel
+#[derive(Debug, Clone)]
+pub struct TemplateColumn {
+    pub title: String,
+    pub text: String,
+    pub thumbnail_image_url: Option<String>,
+    pub image_background_color: Option<String>,
+    pub image_aspect_ratio: Option<String>,
+    pub image_size: Option<String>,
+    pub image_content_mode: Option<String>,
+    pub actions: Vec<TemplateAction>,
+}
+
+/// Quick reply item for LINE messages (legacy - use QuickReplyAction instead)
+#[deprecated(note = "Use QuickReplyAction instead for more action types")]
 pub struct QuickReplyItem {
     pub label: String,
     pub text: String,
 }
 
 impl LineChannel {
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Rich Message Types
+    // ─────────────────────────────────────────────────────────────────────────────
+
     /// Send a flex message
     pub async fn send_flex(&self,
                            to: &str,
@@ -117,7 +314,28 @@ impl LineChannel {
         self.send_push(to, messages).await
     }
 
-    /// Send message with quick reply buttons
+    /// Send message with quick reply buttons (new version with all action types)
+    pub async fn send_with_quick_reply_actions(&self,
+                                               to: &str,
+                                               text: &str,
+                                               actions: Vec<QuickReplyAction>) -> anyhow::Result<()> {
+        let quick_reply_items: Vec<serde_json::Value> = actions
+            .into_iter()
+            .map(|action| action.to_json())
+            .collect();
+
+        let messages = serde_json::json!([{
+            "type": "text",
+            "text": text,
+            "quickReply": {
+                "items": quick_reply_items
+            }
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send message with quick reply buttons (legacy version)
+    #[deprecated(note = "Use send_with_quick_reply_actions instead")]
     pub async fn send_with_quick_reply(&self,
                                        to: &str,
                                        text: &str,
@@ -141,6 +359,306 @@ impl LineChannel {
             }
         }]);
         self.send_push(to, messages).await
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Template Messages
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Send buttons template message
+    pub async fn send_buttons_template(&self,
+                                       to: &str,
+                                       alt_text: &str,
+                                       title: &str,
+                                       text: &str,
+                                       thumbnail_image_url: Option<&str>,
+                                       actions: Vec<TemplateAction>) -> anyhow::Result<()> {
+        let mut template = serde_json::json!({
+            "type": "buttons",
+            "title": title,
+            "text": text,
+            "actions": actions.into_iter().map(|action| action.to_json()).collect::<Vec<_>>()
+        });
+        if let Some(url) = thumbnail_image_url {
+            template["thumbnailImageUrl"] = serde_json::json!(url);
+        }
+        let messages = serde_json::json!([{
+            "type": "template",
+            "altText": alt_text,
+            "template": template
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send confirm template message (simple yes/no dialog)
+    pub async fn send_confirm_template(&self,
+                                       to: &str,
+                                       alt_text: &str,
+                                       text: &str,
+                                       ok_action: TemplateAction,
+                                       cancel_action: TemplateAction) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "template",
+            "altText": alt_text,
+            "template": {
+                "type": "confirm",
+                "text": text,
+                "actions": [ok_action.to_json(), cancel_action.to_json()]
+            }
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send carousel template message (scrollable columns)
+    pub async fn send_carousel_template(&self,
+                                        to: &str,
+                                        alt_text: &str,
+                                        columns: Vec<TemplateColumn>,
+                                        image_aspect_ratio: Option<&str>) -> anyhow::Result<()> {
+        let columns_json: Vec<serde_json::Value> = columns
+            .into_iter()
+            .map(|col| {
+                let mut json = serde_json::json!({
+                    "title": col.title,
+                    "text": col.text,
+                    "actions": col.actions.into_iter().map(|action| action.to_json()).collect::<Vec<_>>()
+                });
+                if let Some(url) = col.thumbnail_image_url {
+                    json["thumbnailImageUrl"] = serde_json::json!(url);
+                }
+                if let Some(color) = col.image_background_color {
+                    json["imageBackgroundColor"] = serde_json::json!(color);
+                }
+                if let Some(ratio) = col.image_aspect_ratio {
+                    json["imageAspectRatio"] = serde_json::json!(ratio);
+                } else if let Some(ratio) = image_aspect_ratio {
+                    json["imageAspectRatio"] = serde_json::json!(ratio);
+                }
+                if let Some(size) = col.image_size {
+                    json["imageSize"] = serde_json::json!(size);
+                }
+                if let Some(mode) = col.image_content_mode {
+                    json["imageContentMode"] = serde_json::json!(mode);
+                }
+                json
+            })
+            .collect();
+
+        let mut template = serde_json::json!({
+            "type": "carousel",
+            "columns": columns_json
+        });
+        if let Some(ratio) = image_aspect_ratio {
+            template["imageAspectRatio"] = serde_json::json!(ratio);
+        }
+
+        let messages = serde_json::json!([{
+            "type": "template",
+            "altText": alt_text,
+            "template": template
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send image carousel template message (multiple images)
+    pub async fn send_image_carousel_template(&self,
+                                              to: &str,
+                                              alt_text: &str,
+                                              columns: Vec<TemplateColumn>) -> anyhow::Result<()> {
+        let columns_json: Vec<serde_json::Value> = columns
+            .into_iter()
+            .map(|col| {
+                let mut json = serde_json::json!({
+                    "imageUrl": col.thumbnail_image_url.unwrap_or_default(),
+                    "action": col.actions.get(0).map(TemplateAction::to_json).unwrap_or(serde_json::json!({
+                        "type": "message",
+                        "label": col.title,
+                        "text": col.text
+                    }))
+                });
+                if let Some(label) = (!col.title.is_empty()).then(|| col.title.clone()) {
+                    json["label"] = serde_json::json!(label);
+                }
+                json
+            })
+            .collect();
+
+        let messages = serde_json::json!([{
+            "type": "template",
+            "altText": alt_text,
+            "template": {
+                "type": "image_carousel",
+                "columns": columns_json
+            }
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Media Messages
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Send image message with URL
+    pub async fn send_image(&self,
+                            to: &str,
+                            original_content_url: &str,
+                            preview_image_url: &str) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "image",
+            "originalContentUrl": original_content_url,
+            "previewImageUrl": preview_image_url
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send video message with URL
+    pub async fn send_video(&self,
+                            to: &str,
+                            original_content_url: &str,
+                            preview_image_url: &str) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "video",
+            "originalContentUrl": original_content_url,
+            "previewImageUrl": preview_image_url
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send audio message with URL
+    pub async fn send_audio(&self,
+                            to: &str,
+                            original_content_url: &str,
+                            duration: u64) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "audio",
+            "originalContentUrl": original_content_url,
+            "duration": duration
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Upload and send image (returns the content URL)
+    pub async fn upload_image(&self,
+                              to: &str,
+                              image_data: Vec<u8>,
+                              content_type: &str) -> anyhow::Result<String> {
+        let url = format!("https://api.line.me/v2/bot/message/{to}/upload");
+
+        let resp = self.client
+            .post(&url)
+            .bearer_auth(&self.channel_access_token)
+            .header("Content-Type", content_type)
+            .body(image_data)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("LINE image upload failed ({status}): {error_body}");
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        json.get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("No content ID in upload response"))
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Location & Sticker Messages
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Send location message
+    pub async fn send_location(&self,
+                               to: &str,
+                               title: &str,
+                               address: &str,
+                               latitude: f64,
+                               longitude: f64) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "location",
+            "title": title,
+            "address": address,
+            "latitude": latitude,
+            "longitude": longitude
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    /// Send sticker message
+    pub async fn send_sticker(&self,
+                              to: &str,
+                              package_id: &str,
+                              sticker_id: &str) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "sticker",
+            "packageId": package_id,
+            "stickerId": sticker_id
+        }]);
+        self.send_push(to, messages).await
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Reply Variants
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Reply with quick reply actions
+    pub async fn reply_with_quick_reply_actions(&self,
+                                                 reply_token: &str,
+                                                 text: &str,
+                                                 actions: Vec<QuickReplyAction>) -> anyhow::Result<()> {
+        let quick_reply_items: Vec<serde_json::Value> = actions
+            .into_iter()
+            .map(|action| action.to_json())
+            .collect();
+
+        let messages = serde_json::json!([{
+            "type": "text",
+            "text": text,
+            "quickReply": {
+                "items": quick_reply_items
+            }
+        }]);
+        self.send_reply(reply_token, messages).await
+    }
+
+    /// Reply with buttons template
+    pub async fn reply_buttons_template(&self,
+                                        reply_token: &str,
+                                        alt_text: &str,
+                                        title: &str,
+                                        text: &str,
+                                        thumbnail_image_url: Option<&str>,
+                                        actions: Vec<TemplateAction>) -> anyhow::Result<()> {
+        let mut template = serde_json::json!({
+            "type": "buttons",
+            "title": title,
+            "text": text,
+            "actions": actions.into_iter().map(|action| action.to_json()).collect::<Vec<_>>()
+        });
+        if let Some(url) = thumbnail_image_url {
+            template["thumbnailImageUrl"] = serde_json::json!(url);
+        }
+        let messages = serde_json::json!([{
+            "type": "template",
+            "altText": alt_text,
+            "template": template
+        }]);
+        self.send_reply(reply_token, messages).await
+    }
+
+    /// Reply with image
+    pub async fn reply_image(&self,
+                             reply_token: &str,
+                             original_content_url: &str,
+                             preview_image_url: &str) -> anyhow::Result<()> {
+        let messages = serde_json::json!([{
+            "type": "image",
+            "originalContentUrl": original_content_url,
+            "previewImageUrl": preview_image_url
+        }]);
+        self.send_reply(reply_token, messages).await
     }
 }
 
