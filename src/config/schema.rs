@@ -3242,6 +3242,8 @@ pub struct ChannelsConfig {
     pub email: Option<crate::channels::email_channel::EmailConfig>,
     /// IRC channel configuration.
     pub irc: Option<IrcConfig>,
+    /// LINE channel configuration.
+    pub line: Option<LineConfig>,
     /// Lark channel configuration.
     pub lark: Option<LarkConfig>,
     /// Feishu channel configuration.
@@ -3380,6 +3382,7 @@ impl Default for ChannelsConfig {
             nextcloud_talk: None,
             email: None,
             irc: None,
+            line: None,
             lark: None,
             feishu: None,
             dingtalk: None,
@@ -3949,6 +3952,27 @@ impl ChannelConfig for IrcConfig {
 
 fn default_irc_port() -> u16 {
     6697
+}
+
+/// LINE channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LineConfig {
+    /// Channel Access Token from LINE Developers Console
+    pub channel_access_token: String,
+    /// Channel Secret for webhook signature verification
+    pub channel_secret: String,
+    /// Allowed LINE User IDs (use "*" for all users)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+}
+
+impl ChannelConfig for LineConfig {
+    fn name() -> &'static str {
+        "LINE"
+    }
+    fn desc() -> &'static str {
+        "LINE Messaging API"
+    }
 }
 
 /// How ZeroClaw receives events from Feishu / Lark.
