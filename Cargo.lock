@@ -9078,6 +9078,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shellexpand 3.1.2",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

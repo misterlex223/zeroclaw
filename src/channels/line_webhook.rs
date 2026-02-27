@@ -59,12 +59,18 @@ pub enum WebhookEventType {
 impl WebhookEventType {
     /// Returns true if this event type should trigger a bot response
     pub fn should_respond(&self) -> bool {
-        matches!(self, Self::Message | Self::Postback | Self::Follow | Self::MemberJoined)
+        matches!(
+            self,
+            Self::Message | Self::Postback | Self::Follow | Self::MemberJoined
+        )
     }
 
     /// Returns true if this event type has a reply token
     pub fn has_reply_token(&self) -> bool {
-        matches!(self, Self::Message | Self::Postback | Self::Follow | Self::MemberJoined | Self::Beacon)
+        matches!(
+            self,
+            Self::Message | Self::Postback | Self::Follow | Self::MemberJoined | Self::Beacon
+        )
     }
 }
 
@@ -416,7 +422,10 @@ mod tests {
         assert_eq!(webhook.events.len(), 1);
         assert_eq!(webhook.events[0].event_type, WebhookEventType::Message);
         assert_eq!(webhook.events[0].source.user_id, "Uabc123");
-        assert_eq!(webhook.events[0].message.as_ref().unwrap().text, Some("Hello".to_string()));
+        assert_eq!(
+            webhook.events[0].message.as_ref().unwrap().text,
+            Some("Hello".to_string())
+        );
     }
 
     #[test]
@@ -452,7 +461,10 @@ mod tests {
 
         let webhook: LineWebhook = serde_json::from_str(json).unwrap();
         assert_eq!(webhook.events[0].event_type, WebhookEventType::Postback);
-        assert_eq!(webhook.events[0].postback.as_ref().unwrap().data, "action=buy&item=123");
+        assert_eq!(
+            webhook.events[0].postback.as_ref().unwrap().data,
+            "action=buy&item=123"
+        );
     }
 
     #[test]

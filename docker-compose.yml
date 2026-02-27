@@ -9,10 +9,10 @@
 
 services:
   zeroclaw:
-    image: ghcr.io/zeroclaw-labs/zeroclaw:latest
+    # image: ghcr.io/zeroclaw-labs/zeroclaw:latest
     # Or build locally:
-    # build: .
-    container_name: zeroclaw
+    build: .
+    container_name: zeroclaw-alex
     restart: unless-stopped
     
     environment:
@@ -62,3 +62,4 @@ services:
 
 volumes:
   zeroclaw-data:
+    external: true

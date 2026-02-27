@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
-use std::time::Duration;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -86,9 +86,11 @@ pub struct LineChannel {
 }
 
 impl LineChannel {
-    pub fn new(channel_access_token: String,
-               channel_secret: String,
-               allowed_users: Vec<String>) -> Self {
+    pub fn new(
+        channel_access_token: String,
+        channel_secret: String,
+        allowed_users: Vec<String>,
+    ) -> Self {
         Self {
             channel_access_token,
             channel_secret,
@@ -101,10 +103,12 @@ impl LineChannel {
     }
 
     /// Create a new LineChannel with custom retry configuration
-    pub fn with_retry_config(channel_access_token: String,
-                            channel_secret: String,
-                            allowed_users: Vec<String>,
-                            retry_config: LineRetryConfig) -> Self {
+    pub fn with_retry_config(
+        channel_access_token: String,
+        channel_secret: String,
+        allowed_users: Vec<String>,
+        retry_config: LineRetryConfig,
+    ) -> Self {
         Self {
             channel_access_token,
             channel_secret,
@@ -155,8 +159,7 @@ impl LineChannel {
         let expected = mac.finalize().into_bytes();
 
         // Constant-time comparison to prevent timing attacks
-        decoded_sig.len() == expected.len()
-            && decoded_sig.ct_eq(&expected).into()
+        decoded_sig.len() == expected.len() && decoded_sig.ct_eq(&expected).into()
     }
 
     /// Check if a LINE user ID is in the allowlist
@@ -170,13 +173,16 @@ impl LineChannel {
 
     /// Update rate limit info from response headers
     fn update_rate_limit_from_headers(&self, headers: &reqwest::header::HeaderMap) {
-        if let Some(remaining) = headers.get("x-ratelimit-remaining")
+        if let Some(remaining) = headers
+            .get("x-ratelimit-remaining")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
         {
-            self.rate_limit_remaining.store(remaining, Ordering::Relaxed);
+            self.rate_limit_remaining
+                .store(remaining, Ordering::Relaxed);
         }
-        if let Some(reset) = headers.get("x-ratelimit-reset")
+        if let Some(reset) = headers
+            .get("x-ratelimit-reset")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
         {
@@ -190,18 +196,20 @@ impl LineChannel {
 
         // Try to parse LINE's error format
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-            let message = json.get("message")
+            let message = json
+                .get("message")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown error")
                 .to_string();
-            let code = json.get("error")
+            let code = json
+                .get("error")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
             let retryable = match status_code {
-                429 => true,  // Rate limit
-                500..=599 => true,  // Server errors
-                408 => true,  // Request timeout
+                429 => true,       // Rate limit
+                500..=599 => true, // Server errors
+                408 => true,       // Request timeout
                 _ => false,
             };
 
@@ -246,7 +254,8 @@ impl LineChannel {
 
         // Exponential backoff
         let base_delay = self.retry_config.initial_delay.as_millis() as f64;
-        let exponential_delay = base_delay * self.retry_config.backoff_multiplier.powi(attempt as i32);
+        let exponential_delay =
+            base_delay * self.retry_config.backoff_multiplier.powi(attempt as i32);
         let delay_ms = exponential_delay as u64;
 
         // Cap at max delay
@@ -278,7 +287,8 @@ impl LineChannel {
             }
 
             // Build and send request
-            match self.client
+            match self
+                .client
                 .post(url)
                 .bearer_auth(&self.channel_access_token)
                 .json(&body)
@@ -317,13 +327,16 @@ impl LineChannel {
                 Err(e) => {
                     // Network or other error
                     if attempt < self.retry_config.max_retries {
-                        let delay = self.calculate_retry_delay(attempt, &LineApiError {
-                            status: 0,
-                            code: None,
-                            message: e.to_string(),
-                            retryable: true,
-                            retry_after: None,
-                        });
+                        let delay = self.calculate_retry_delay(
+                            attempt,
+                            &LineApiError {
+                                status: 0,
+                                code: None,
+                                message: e.to_string(),
+                                retryable: true,
+                                retry_after: None,
+                            },
+                        );
                         tracing::warn!(
                             "LINE API network error (attempt {}/{}): {}, retrying in {:?}",
                             attempt,
@@ -345,16 +358,19 @@ impl LineChannel {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Send reply message to LINE (with retry)
-    async fn send_reply(&self, reply_token: &str, messages: serde_json::Value) -> anyhow::Result<()> {
+    async fn send_reply(
+        &self,
+        reply_token: &str,
+        messages: serde_json::Value,
+    ) -> anyhow::Result<()> {
         let body = serde_json::json!({
             "replyToken": reply_token,
             "messages": messages
         });
 
-        let resp = self.send_http_with_retry(
-            "https://api.line.me/v2/bot/message/reply",
-            body,
-        ).await?;
+        let resp = self
+            .send_http_with_retry("https://api.line.me/v2/bot/message/reply", body)
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -373,10 +389,9 @@ impl LineChannel {
             "messages": messages
         });
 
-        let resp = self.send_http_with_retry(
-            "https://api.line.me/v2/bot/message/push",
-            body,
-        ).await?;
+        let resp = self
+            .send_http_with_retry("https://api.line.me/v2/bot/message/push", body)
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -399,15 +414,39 @@ pub enum QuickReplyAction {
     /// Message action - sends a text message when tapped
     Message { label: String, text: String },
     /// Postback action - sends data via postback event
-    Postback { label: String, data: String, text: Option<String> },
+    Postback {
+        label: String,
+        data: String,
+        text: Option<String>,
+    },
     /// URI action - opens a URL
-    Uri { label: String, uri: String, alt_uri: Option<String> },
+    Uri {
+        label: String,
+        uri: String,
+        alt_uri: Option<String>,
+    },
     /// Date picker action - sends date value
-    DatePicker { label: String, data: String, initial: Option<String>, max: Option<String>, min: Option<String> },
+    DatePicker {
+        label: String,
+        data: String,
+        initial: Option<String>,
+        max: Option<String>,
+        min: Option<String>,
+    },
     /// Time picker action - sends time value
-    TimePicker { label: String, data: String, initial: Option<String> },
+    TimePicker {
+        label: String,
+        data: String,
+        initial: Option<String>,
+    },
     /// Datetime picker action - sends datetime value
-    DateTimePicker { label: String, data: String, initial: Option<String>, max: Option<String>, min: Option<String> },
+    DateTimePicker {
+        label: String,
+        data: String,
+        initial: Option<String>,
+        max: Option<String>,
+        min: Option<String>,
+    },
 }
 
 impl QuickReplyAction {
@@ -435,7 +474,11 @@ impl QuickReplyAction {
                     "action": action
                 })
             }
-            QuickReplyAction::Uri { label, uri, alt_uri } => {
+            QuickReplyAction::Uri {
+                label,
+                uri,
+                alt_uri,
+            } => {
                 let mut action = serde_json::json!({
                     "type": "uri",
                     "label": label,
@@ -449,7 +492,13 @@ impl QuickReplyAction {
                     "action": action
                 })
             }
-            QuickReplyAction::DatePicker { label, data, initial, max, min } => {
+            QuickReplyAction::DatePicker {
+                label,
+                data,
+                initial,
+                max,
+                min,
+            } => {
                 let mut action = serde_json::json!({
                     "type": "datepicker",
                     "label": label,
@@ -469,7 +518,11 @@ impl QuickReplyAction {
                     "action": action
                 })
             }
-            QuickReplyAction::TimePicker { label, data, initial } => {
+            QuickReplyAction::TimePicker {
+                label,
+                data,
+                initial,
+            } => {
                 let mut action = serde_json::json!({
                     "type": "timepicker",
                     "label": label,
@@ -483,7 +536,13 @@ impl QuickReplyAction {
                     "action": action
                 })
             }
-            QuickReplyAction::DateTimePicker { label, data, initial, max, min } => {
+            QuickReplyAction::DateTimePicker {
+                label,
+                data,
+                initial,
+                max,
+                min,
+            } => {
                 let mut action = serde_json::json!({
                     "type": "datetimepicker",
                     "label": label,
@@ -510,10 +569,28 @@ impl QuickReplyAction {
 /// Action for template message buttons
 #[derive(Debug, Clone)]
 pub enum TemplateAction {
-    Message { label: String, text: String },
-    Postback { label: String, data: String, text: Option<String> },
-    Uri { label: String, uri: String, alt_uri: Option<String> },
-    DatetimePicker { label: String, data: String, mode: String, initial: Option<String>, max: Option<String>, min: Option<String> },
+    Message {
+        label: String,
+        text: String,
+    },
+    Postback {
+        label: String,
+        data: String,
+        text: Option<String>,
+    },
+    Uri {
+        label: String,
+        uri: String,
+        alt_uri: Option<String>,
+    },
+    DatetimePicker {
+        label: String,
+        data: String,
+        mode: String,
+        initial: Option<String>,
+        max: Option<String>,
+        min: Option<String>,
+    },
 }
 
 impl TemplateAction {
@@ -535,7 +612,11 @@ impl TemplateAction {
                 }
                 action
             }
-            TemplateAction::Uri { label, uri, alt_uri } => {
+            TemplateAction::Uri {
+                label,
+                uri,
+                alt_uri,
+            } => {
                 let mut action = serde_json::json!({
                     "type": "uri",
                     "label": label,
@@ -546,7 +627,14 @@ impl TemplateAction {
                 }
                 action
             }
-            TemplateAction::DatetimePicker { label, data, mode, initial, max, min } => {
+            TemplateAction::DatetimePicker {
+                label,
+                data,
+                mode,
+                initial,
+                max,
+                min,
+            } => {
                 let mut action = serde_json::json!({
                     "type": "datetimepicker",
                     "label": label,
@@ -594,10 +682,12 @@ impl LineChannel {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Send a flex message
-    pub async fn send_flex(&self,
-                           to: &str,
-                           alt_text: &str,
-                           contents: &serde_json::Value) -> anyhow::Result<()> {
+    pub async fn send_flex(
+        &self,
+        to: &str,
+        alt_text: &str,
+        contents: &serde_json::Value,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "flex",
             "altText": alt_text,
@@ -607,26 +697,32 @@ impl LineChannel {
     }
 
     /// Send flex bubble message using the flex builder types
-    pub async fn send_flex_bubble(&self,
-                                   to: &str,
-                                   alt_text: &str,
-                                   bubble: &flex::FlexBubble) -> anyhow::Result<()> {
+    pub async fn send_flex_bubble(
+        &self,
+        to: &str,
+        alt_text: &str,
+        bubble: &flex::FlexBubble,
+    ) -> anyhow::Result<()> {
         self.send_flex(to, alt_text, &bubble.to_json()).await
     }
 
     /// Send flex carousel message using the flex builder types
-    pub async fn send_flex_carousel(&self,
-                                     to: &str,
-                                     alt_text: &str,
-                                     carousel: &flex::FlexCarousel) -> anyhow::Result<()> {
+    pub async fn send_flex_carousel(
+        &self,
+        to: &str,
+        alt_text: &str,
+        carousel: &flex::FlexCarousel,
+    ) -> anyhow::Result<()> {
         self.send_flex(to, alt_text, &carousel.to_json()).await
     }
 
     /// Reply with flex bubble message
-    pub async fn reply_flex_bubble(&self,
-                                    reply_token: &str,
-                                    alt_text: &str,
-                                    bubble: &flex::FlexBubble) -> anyhow::Result<()> {
+    pub async fn reply_flex_bubble(
+        &self,
+        reply_token: &str,
+        alt_text: &str,
+        bubble: &flex::FlexBubble,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "flex",
             "altText": alt_text,
@@ -636,14 +732,14 @@ impl LineChannel {
     }
 
     /// Send message with quick reply buttons (new version with all action types)
-    pub async fn send_with_quick_reply_actions(&self,
-                                               to: &str,
-                                               text: &str,
-                                               actions: Vec<QuickReplyAction>) -> anyhow::Result<()> {
-        let quick_reply_items: Vec<serde_json::Value> = actions
-            .into_iter()
-            .map(|action| action.to_json())
-            .collect();
+    pub async fn send_with_quick_reply_actions(
+        &self,
+        to: &str,
+        text: &str,
+        actions: Vec<QuickReplyAction>,
+    ) -> anyhow::Result<()> {
+        let quick_reply_items: Vec<serde_json::Value> =
+            actions.into_iter().map(|action| action.to_json()).collect();
 
         let messages = serde_json::json!([{
             "type": "text",
@@ -657,19 +753,24 @@ impl LineChannel {
 
     /// Send message with quick reply buttons (legacy version)
     #[deprecated(note = "Use send_with_quick_reply_actions instead")]
-    pub async fn send_with_quick_reply(&self,
-                                       to: &str,
-                                       text: &str,
-                                       items: Vec<QuickReplyItem>) -> anyhow::Result<()> {
-        let quick_reply_items: Vec<serde_json::Value> = items.into_iter()
-            .map(|item| serde_json::json!({
-                "type": "action",
-                "action": {
-                    "type": "message",
-                    "label": item.label,
-                    "text": item.text
-                }
-            }))
+    pub async fn send_with_quick_reply(
+        &self,
+        to: &str,
+        text: &str,
+        items: Vec<QuickReplyItem>,
+    ) -> anyhow::Result<()> {
+        let quick_reply_items: Vec<serde_json::Value> = items
+            .into_iter()
+            .map(|item| {
+                serde_json::json!({
+                    "type": "action",
+                    "action": {
+                        "type": "message",
+                        "label": item.label,
+                        "text": item.text
+                    }
+                })
+            })
             .collect();
 
         let messages = serde_json::json!([{
@@ -687,13 +788,15 @@ impl LineChannel {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Send buttons template message
-    pub async fn send_buttons_template(&self,
-                                       to: &str,
-                                       alt_text: &str,
-                                       title: &str,
-                                       text: &str,
-                                       thumbnail_image_url: Option<&str>,
-                                       actions: Vec<TemplateAction>) -> anyhow::Result<()> {
+    pub async fn send_buttons_template(
+        &self,
+        to: &str,
+        alt_text: &str,
+        title: &str,
+        text: &str,
+        thumbnail_image_url: Option<&str>,
+        actions: Vec<TemplateAction>,
+    ) -> anyhow::Result<()> {
         let mut template = serde_json::json!({
             "type": "buttons",
             "title": title,
@@ -712,12 +815,14 @@ impl LineChannel {
     }
 
     /// Send confirm template message (simple yes/no dialog)
-    pub async fn send_confirm_template(&self,
-                                       to: &str,
-                                       alt_text: &str,
-                                       text: &str,
-                                       ok_action: TemplateAction,
-                                       cancel_action: TemplateAction) -> anyhow::Result<()> {
+    pub async fn send_confirm_template(
+        &self,
+        to: &str,
+        alt_text: &str,
+        text: &str,
+        ok_action: TemplateAction,
+        cancel_action: TemplateAction,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "template",
             "altText": alt_text,
@@ -731,11 +836,13 @@ impl LineChannel {
     }
 
     /// Send carousel template message (scrollable columns)
-    pub async fn send_carousel_template(&self,
-                                        to: &str,
-                                        alt_text: &str,
-                                        columns: Vec<TemplateColumn>,
-                                        image_aspect_ratio: Option<&str>) -> anyhow::Result<()> {
+    pub async fn send_carousel_template(
+        &self,
+        to: &str,
+        alt_text: &str,
+        columns: Vec<TemplateColumn>,
+        image_aspect_ratio: Option<&str>,
+    ) -> anyhow::Result<()> {
         let columns_json: Vec<serde_json::Value> = columns
             .into_iter()
             .map(|col| {
@@ -782,10 +889,12 @@ impl LineChannel {
     }
 
     /// Send image carousel template message (multiple images)
-    pub async fn send_image_carousel_template(&self,
-                                              to: &str,
-                                              alt_text: &str,
-                                              columns: Vec<TemplateColumn>) -> anyhow::Result<()> {
+    pub async fn send_image_carousel_template(
+        &self,
+        to: &str,
+        alt_text: &str,
+        columns: Vec<TemplateColumn>,
+    ) -> anyhow::Result<()> {
         let columns_json: Vec<serde_json::Value> = columns
             .into_iter()
             .map(|col| {
@@ -820,10 +929,12 @@ impl LineChannel {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Send image message with URL
-    pub async fn send_image(&self,
-                            to: &str,
-                            original_content_url: &str,
-                            preview_image_url: &str) -> anyhow::Result<()> {
+    pub async fn send_image(
+        &self,
+        to: &str,
+        original_content_url: &str,
+        preview_image_url: &str,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "image",
             "originalContentUrl": original_content_url,
@@ -833,10 +944,12 @@ impl LineChannel {
     }
 
     /// Send video message with URL
-    pub async fn send_video(&self,
-                            to: &str,
-                            original_content_url: &str,
-                            preview_image_url: &str) -> anyhow::Result<()> {
+    pub async fn send_video(
+        &self,
+        to: &str,
+        original_content_url: &str,
+        preview_image_url: &str,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "video",
             "originalContentUrl": original_content_url,
@@ -846,10 +959,12 @@ impl LineChannel {
     }
 
     /// Send audio message with URL
-    pub async fn send_audio(&self,
-                            to: &str,
-                            original_content_url: &str,
-                            duration: u64) -> anyhow::Result<()> {
+    pub async fn send_audio(
+        &self,
+        to: &str,
+        original_content_url: &str,
+        duration: u64,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "audio",
             "originalContentUrl": original_content_url,
@@ -859,13 +974,16 @@ impl LineChannel {
     }
 
     /// Upload and send image (returns the content URL)
-    pub async fn upload_image(&self,
-                              to: &str,
-                              image_data: Vec<u8>,
-                              content_type: &str) -> anyhow::Result<String> {
+    pub async fn upload_image(
+        &self,
+        to: &str,
+        image_data: Vec<u8>,
+        content_type: &str,
+    ) -> anyhow::Result<String> {
         let url = format!("https://api.line.me/v2/bot/message/{to}/upload");
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .bearer_auth(&self.channel_access_token)
             .header("Content-Type", content_type)
@@ -905,7 +1023,8 @@ impl LineChannel {
         // so this is a simplified version that calls back at start/end
         progress_callback(0, total_bytes);
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .bearer_auth(&self.channel_access_token)
             .header("Content-Type", content_type)
@@ -929,17 +1048,22 @@ impl LineChannel {
     }
 
     /// Upload image with retry on failure
-    pub async fn upload_image_with_retry(&self,
-                                         to: &str,
-                                         image_data: Vec<u8>,
-                                         content_type: &str) -> anyhow::Result<String> {
+    pub async fn upload_image_with_retry(
+        &self,
+        to: &str,
+        image_data: Vec<u8>,
+        content_type: &str,
+    ) -> anyhow::Result<String> {
         let mut attempt = 0;
         let max_attempts = self.retry_config.max_retries;
 
         loop {
             attempt += 1;
 
-            match self.upload_image(to, image_data.clone(), content_type).await {
+            match self
+                .upload_image(to, image_data.clone(), content_type)
+                .await
+            {
                 Ok(id) => return Ok(id),
                 Err(e) => {
                     if attempt >= max_attempts {
@@ -954,7 +1078,7 @@ impl LineChannel {
                             message: e.to_string(),
                             retryable: true,
                             retry_after: None,
-                        }
+                        },
                     );
 
                     tracing::warn!(
@@ -974,12 +1098,14 @@ impl LineChannel {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Send location message
-    pub async fn send_location(&self,
-                               to: &str,
-                               title: &str,
-                               address: &str,
-                               latitude: f64,
-                               longitude: f64) -> anyhow::Result<()> {
+    pub async fn send_location(
+        &self,
+        to: &str,
+        title: &str,
+        address: &str,
+        latitude: f64,
+        longitude: f64,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "location",
             "title": title,
@@ -991,10 +1117,12 @@ impl LineChannel {
     }
 
     /// Send sticker message
-    pub async fn send_sticker(&self,
-                              to: &str,
-                              package_id: &str,
-                              sticker_id: &str) -> anyhow::Result<()> {
+    pub async fn send_sticker(
+        &self,
+        to: &str,
+        package_id: &str,
+        sticker_id: &str,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "sticker",
             "packageId": package_id,
@@ -1008,14 +1136,14 @@ impl LineChannel {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Reply with quick reply actions
-    pub async fn reply_with_quick_reply_actions(&self,
-                                                 reply_token: &str,
-                                                 text: &str,
-                                                 actions: Vec<QuickReplyAction>) -> anyhow::Result<()> {
-        let quick_reply_items: Vec<serde_json::Value> = actions
-            .into_iter()
-            .map(|action| action.to_json())
-            .collect();
+    pub async fn reply_with_quick_reply_actions(
+        &self,
+        reply_token: &str,
+        text: &str,
+        actions: Vec<QuickReplyAction>,
+    ) -> anyhow::Result<()> {
+        let quick_reply_items: Vec<serde_json::Value> =
+            actions.into_iter().map(|action| action.to_json()).collect();
 
         let messages = serde_json::json!([{
             "type": "text",
@@ -1028,13 +1156,15 @@ impl LineChannel {
     }
 
     /// Reply with buttons template
-    pub async fn reply_buttons_template(&self,
-                                        reply_token: &str,
-                                        alt_text: &str,
-                                        title: &str,
-                                        text: &str,
-                                        thumbnail_image_url: Option<&str>,
-                                        actions: Vec<TemplateAction>) -> anyhow::Result<()> {
+    pub async fn reply_buttons_template(
+        &self,
+        reply_token: &str,
+        alt_text: &str,
+        title: &str,
+        text: &str,
+        thumbnail_image_url: Option<&str>,
+        actions: Vec<TemplateAction>,
+    ) -> anyhow::Result<()> {
         let mut template = serde_json::json!({
             "type": "buttons",
             "title": title,
@@ -1053,10 +1183,12 @@ impl LineChannel {
     }
 
     /// Reply with image
-    pub async fn reply_image(&self,
-                             reply_token: &str,
-                             original_content_url: &str,
-                             preview_image_url: &str) -> anyhow::Result<()> {
+    pub async fn reply_image(
+        &self,
+        reply_token: &str,
+        original_content_url: &str,
+        preview_image_url: &str,
+    ) -> anyhow::Result<()> {
         let messages = serde_json::json!([{
             "type": "image",
             "originalContentUrl": original_content_url,
@@ -1068,7 +1200,7 @@ impl LineChannel {
 
 /// Helper to decode base64 URL-safe (no padding)
 fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     general_purpose::URL_SAFE_NO_PAD.decode(input)
 }
 
@@ -1078,18 +1210,21 @@ impl Channel for LineChannel {
         "line"
     }
 
-    async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()> {
+    async fn send(&self, message: &super::traits::SendMessage) -> anyhow::Result<()> {
         // recipient is LINE User ID for push messages
         let messages = serde_json::json!([
             {
                 "type": "text",
-                "text": message
+                "text": message.content
             }
         ]);
-        self.send_push(recipient, messages).await
+        self.send_push(&message.recipient, messages).await
     }
 
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<super::traits::ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<super::traits::ChannelMessage>,
+    ) -> anyhow::Result<()> {
         // Webhook-based: Gateway handles incoming messages
         // This waits indefinitely since we don't poll
         std::future::pending().await
@@ -1570,14 +1705,30 @@ pub mod flex {
                         },
                         "contents": b.contents.iter().map(|c| c.to_json()).collect::<Vec<_>>()
                     });
-                    if let Some(f) = b.flex { json["flex"] = serde_json::json!(f); }
-                    if let Some(s) = &b.spacing { json["spacing"] = serde_json::json!(s); }
-                    if let Some(m) = &b.margin { json["margin"] = serde_json::json!(m); }
-                    if let Some(p) = &b.padding_all { json["paddingAll"] = serde_json::json!(p); }
-                    if let Some(c) = &b.background_color { json["backgroundColor"] = serde_json::json!(c); }
-                    if let Some(r) = &b.corner_radius { json["cornerRadius"] = serde_json::json!(r); }
-                    if let Some(w) = &b.width { json["width"] = serde_json::json!(w); }
-                    if let Some(h) = &b.height { json["height"] = serde_json::json!(h); }
+                    if let Some(f) = b.flex {
+                        json["flex"] = serde_json::json!(f);
+                    }
+                    if let Some(s) = &b.spacing {
+                        json["spacing"] = serde_json::json!(s);
+                    }
+                    if let Some(m) = &b.margin {
+                        json["margin"] = serde_json::json!(m);
+                    }
+                    if let Some(p) = &b.padding_all {
+                        json["paddingAll"] = serde_json::json!(p);
+                    }
+                    if let Some(c) = &b.background_color {
+                        json["backgroundColor"] = serde_json::json!(c);
+                    }
+                    if let Some(r) = &b.corner_radius {
+                        json["cornerRadius"] = serde_json::json!(r);
+                    }
+                    if let Some(w) = &b.width {
+                        json["width"] = serde_json::json!(w);
+                    }
+                    if let Some(h) = &b.height {
+                        json["height"] = serde_json::json!(h);
+                    }
                     json
                 }
                 FlexComponentData::Text(t) => {
@@ -1585,13 +1736,27 @@ pub mod flex {
                         "type": "text",
                         "text": t.text
                     });
-                    if let Some(s) = &t.size { json["size"] = serde_json::json!(s); }
-                    if let Some(a) = &t.align { json["align"] = serde_json::json!(a); }
-                    if let Some(c) = &t.color { json["color"] = serde_json::json!(c); }
-                    if let Some(w) = &t.weight { json["weight"] = serde_json::json!(w); }
-                    if let Some(m) = &t.margin { json["margin"] = serde_json::json!(m); }
-                    if let Some(w) = t.wrap { json["wrap"] = serde_json::json!(w); }
-                    if let Some(m) = t.max_lines { json["maxLines"] = serde_json::json!(m); }
+                    if let Some(s) = &t.size {
+                        json["size"] = serde_json::json!(s);
+                    }
+                    if let Some(a) = &t.align {
+                        json["align"] = serde_json::json!(a);
+                    }
+                    if let Some(c) = &t.color {
+                        json["color"] = serde_json::json!(c);
+                    }
+                    if let Some(w) = &t.weight {
+                        json["weight"] = serde_json::json!(w);
+                    }
+                    if let Some(m) = &t.margin {
+                        json["margin"] = serde_json::json!(m);
+                    }
+                    if let Some(w) = t.wrap {
+                        json["wrap"] = serde_json::json!(w);
+                    }
+                    if let Some(m) = t.max_lines {
+                        json["maxLines"] = serde_json::json!(m);
+                    }
                     json
                 }
                 FlexComponentData::Image(i) => {
@@ -1599,10 +1764,18 @@ pub mod flex {
                         "type": "image",
                         "url": i.url
                     });
-                    if let Some(f) = i.flex { json["flex"] = serde_json::json!(f); }
-                    if let Some(m) = &i.margin { json["margin"] = serde_json::json!(m); }
-                    if let Some(r) = &i.aspect_ratio { json["aspectRatio"] = serde_json::json!(r); }
-                    if let Some(s) = &i.size { json["size"] = serde_json::json!(s); }
+                    if let Some(f) = i.flex {
+                        json["flex"] = serde_json::json!(f);
+                    }
+                    if let Some(m) = &i.margin {
+                        json["margin"] = serde_json::json!(m);
+                    }
+                    if let Some(r) = &i.aspect_ratio {
+                        json["aspectRatio"] = serde_json::json!(r);
+                    }
+                    if let Some(s) = &i.size {
+                        json["size"] = serde_json::json!(s);
+                    }
                     json
                 }
                 FlexComponentData::Button(b) => {
@@ -1617,7 +1790,9 @@ pub mod flex {
                             FlexButtonStyle::Secondary => "secondary",
                         });
                     }
-                    if let Some(m) = &b.margin { json["margin"] = serde_json::json!(m); }
+                    if let Some(m) = &b.margin {
+                        json["margin"] = serde_json::json!(m);
+                    }
                     json
                 }
                 FlexComponentData::Icon(i) => {
@@ -1625,14 +1800,22 @@ pub mod flex {
                         "type": "icon",
                         "url": i.url
                     });
-                    if let Some(s) = &i.size { json["size"] = serde_json::json!(s); }
-                    if let Some(m) = &i.margin { json["margin"] = serde_json::json!(m); }
+                    if let Some(s) = &i.size {
+                        json["size"] = serde_json::json!(s);
+                    }
+                    if let Some(m) = &i.margin {
+                        json["margin"] = serde_json::json!(m);
+                    }
                     json
                 }
                 FlexComponentData::Separator(s) => {
                     let mut json = serde_json::json!({"type": "separator"});
-                    if let Some(m) = &s.margin { json["margin"] = serde_json::json!(m); }
-                    if let Some(c) = &s.color { json["color"] = serde_json::json!(c); }
+                    if let Some(m) = &s.margin {
+                        json["margin"] = serde_json::json!(m);
+                    }
+                    if let Some(c) = &s.color {
+                        json["color"] = serde_json::json!(c);
+                    }
                     json
                 }
                 FlexComponentData::Spacer(s) => serde_json::json!({
@@ -1875,7 +2058,12 @@ mod tests {
             max_delay: Duration::from_secs(30),
             backoff_multiplier: 3.0,
         };
-        let ch = LineChannel::with_retry_config("token".into(), "secret".into(), vec![], retry_config.clone());
+        let ch = LineChannel::with_retry_config(
+            "token".into(),
+            "secret".into(),
+            vec![],
+            retry_config.clone(),
+        );
         assert_eq!(ch.retry_config().max_retries, 5);
         assert_eq!(ch.retry_config().initial_delay, Duration::from_millis(100));
     }
