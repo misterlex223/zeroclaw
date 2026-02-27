@@ -21,6 +21,8 @@ pub mod discord;
 pub mod email_channel;
 pub mod imessage;
 pub mod irc;
+pub mod line;
+pub mod line_webhook;
 #[cfg(feature = "channel-lark")]
 pub mod lark;
 pub mod linq;
@@ -49,6 +51,8 @@ pub use discord::DiscordChannel;
 pub use email_channel::EmailChannel;
 pub use imessage::IMessageChannel;
 pub use irc::IrcChannel;
+pub use line::LineChannel;
+pub use line_webhook::{LineMessage, LineWebhook, WebhookEvent, WebhookEventType};
 #[cfg(feature = "channel-lark")]
 pub use lark::LarkChannel;
 pub use linq::LinqChannel;
