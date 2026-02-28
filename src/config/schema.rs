@@ -3549,6 +3549,10 @@ impl ChannelsConfig {
                 self.irc.is_some()
             ),
             (
+                Box::new(ConfigWrapper::new(self.line.as_ref())),
+                self.line.is_some(),
+            ),
+            (
                 Box::new(ConfigWrapper::new(self.lark.as_ref())),
                 self.lark.is_some(),
             ),

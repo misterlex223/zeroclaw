@@ -4587,6 +4587,17 @@ fn collect_configured_channels(
         );
     }
 
+    if let Some(ref ln) = config.channels_config.line {
+        channels.push(ConfiguredChannel {
+            display_name: "LINE",
+            channel: Arc::new(LineChannel::new(
+                ln.channel_access_token.clone(),
+                ln.channel_secret.clone(),
+                ln.allowed_users.clone(),
+            )),
+        });
+    }
+
     if let Some(ref dt) = config.channels_config.dingtalk {
         channels.push(ConfiguredChannel {
             display_name: "DingTalk",
