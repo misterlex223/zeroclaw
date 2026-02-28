@@ -11,21 +11,27 @@
 
 use super::AppState;
 use crate::agent::loop_::{
-    build_shell_policy_instructions, build_tool_instructions_from_specs, run_tool_call_loop,
+    build_shell_policy_instructions, build_tool_instructions_from_specs,
 };
 use crate::approval::ApprovalManager;
 use crate::providers::ChatMessage;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
+        Query, State, WebSocketUpgrade,
     },
     http::{header, HeaderMap},
     response::IntoResponse,
 };
+use serde::Deserialize;
 
 const EMPTY_WS_RESPONSE_FALLBACK: &str =
     "Tool execution completed, but the model returned no final text response. Please ask me to summarize the result.";
+
+#[derive(Deserialize)]
+pub struct WsChatQuery {
+    pub token: Option<String>,
+}
 
 fn sanitize_ws_response(response: &str, tools: &[Box<dyn crate::tools::Tool>]) -> String {
     let sanitized = crate::channels::sanitize_channel_response(response, tools);
@@ -155,16 +161,19 @@ fn build_ws_system_prompt(
 /// GET /ws/chat — WebSocket upgrade for agent chat
 pub async fn handle_ws_chat(
     State(state): State<AppState>,
+    Query(query): Query<WsChatQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    // Auth via Authorization header or websocket protocol token.
+    // Auth via Authorization header, websocket protocol, or query parameter token.
     if state.pairing.require_pairing() {
-        let token = extract_ws_bearer_token(&headers).unwrap_or_default();
+        let token = extract_ws_bearer_token(&headers)
+            .or_else(|| query.token.filter(|t| !t.is_empty()))
+            .unwrap_or_default();
         if !state.pairing.is_authenticated(&token) {
             return (
                 axum::http::StatusCode::UNAUTHORIZED,
-                "Unauthorized — provide Authorization: Bearer <token> or Sec-WebSocket-Protocol: bearer.<token>",
+                "Unauthorized — provide Authorization: Bearer <token>, Sec-WebSocket-Protocol: bearer.<token>, or ?token= in URL",
             )
                 .into_response();
         }
